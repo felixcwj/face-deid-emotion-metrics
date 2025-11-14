@@ -175,7 +175,7 @@ class FaceSimilarityEngine:
         matrix = np.zeros((len(faces_a), len(faces_b)), dtype=np.float32)
         for i, face_a in enumerate(faces_a):
             for j, face_b in enumerate(faces_b):
-                matrix[i, j] = float(np.dot(face_a.embedding, face_b.embedding))
+                matrix[i, j] = self._cosine_similarity(face_a.embedding, face_b.embedding)
         flat: List[Tuple[int, int, float]] = []
         for i in range(matrix.shape[0]):
             for j in range(matrix.shape[1]):
@@ -195,6 +195,14 @@ class FaceSimilarityEngine:
     def _cosine_percent(self, value: float) -> float:
         percent = (value + 1.0) * 50.0
         return float(max(0.0, min(100.0, percent)))
+
+    def _cosine_similarity(self, embedding_a: np.ndarray, embedding_b: np.ndarray) -> float:
+        tensor_a = torch.from_numpy(embedding_a.astype(np.float32, copy=False)).to(self.device)
+        tensor_b = torch.from_numpy(embedding_b.astype(np.float32, copy=False)).to(self.device)
+        tensor_a = torch.nn.functional.normalize(tensor_a, dim=0)
+        tensor_b = torch.nn.functional.normalize(tensor_b, dim=0)
+        similarity = torch.nn.functional.cosine_similarity(tensor_a.unsqueeze(0), tensor_b.unsqueeze(0))
+        return float(similarity.item())
 
     def _style_percent(self, image_a: Image.Image, image_b: Image.Image) -> float:
         tensor_a = self._lpips_tensor(image_a)

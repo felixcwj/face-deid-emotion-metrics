@@ -10,3 +10,4 @@ openpyxl
 fer
 deepface
 tf-keras
+tqdm

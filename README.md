@@ -45,17 +45,17 @@ base_dir/
 
 Each processed file produces one row with columns:
 1. filename (relative path under `input/`)
-2. FaceNet similarity (%)
-3. LPIPS similarity (%)
-4. Final face similarity score (%)
-5. FER emotion similarity (%)
-6. DeepFace emotion similarity (%)
+2. FaceNet (%)
+3. LPIPS (%)
+4. Final score (%)
+5. FER emotion (%)
+6. DeepFace emotion (%)
 
 Formatting rules:
 - Filename column auto-expands to fit the longest path.
-- All cells are horizontally and vertically centered.
-- The Final score column uses bold text.
-- Thick vertical borders separate (LPIPS | Final) and (Final | FER) to visually split identity/style vs. emotion blocks.
+- Metric headers and values stay centered with one decimal place.
+- Final score (%) stays bold and sits between thick vertical borders (LPIPS | Final) and (Final | FER).
+- The header row, table frame, and last data row are outlined with thick borders so the table reads well in Excel.
 
 ## Requirements
 
@@ -74,7 +74,7 @@ pip install -r requirements.txt
 
 ## Usage
 
-Run directly via the CLI:
+Run directly via the CLI (progress bar and `Using device: cuda:0` will appear when CUDA is active):
 
 ```powershell
 python -m face_deid_emotion_metrics.cli --base-dir D:\RAPA --output D:\RAPA\rapa_report.xlsx --max-frames-per-video 32 --style-threshold 70
@@ -88,6 +88,25 @@ pwsh -File .\scripts\run_rapa.ps1
 
 Adjust `--base-dir`, `--output`, `--max-frames-per-video`, `--style-threshold`, and `--lpips-distance-max` for future datasets.
 
+### Debug / sample runs
+
+Add `--max-files N` to process only the first `N` matched file pairs (sorted by relative path). This option is strictly for troubleshooting and does not change the default behavior; omitting it processes the entire dataset.
+
 ## Output
 
 The pipeline writes a single Excel workbook summarizing all files. The Final score column is bold and separated by thick borders so reviewers can quickly distinguish identity/style metrics from FER/DeepFace emotion metrics.
+
+## Run on D:\RAPA from a fresh PowerShell 7 session
+
+```powershell
+pwsh
+Set-Location C:\projects\face-deid-emotion-metrics
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+pip install -e .
+python -m face_deid_emotion_metrics.cli --base-dir D:\RAPA --output D:\RAPA\rapa_report_full.xlsx
+```
+
+You should see `Using device: cuda:0` and a live progress bar. If CUDA is unavailable, the run will abort immediately so you can fix the GPU environment before rerunning.

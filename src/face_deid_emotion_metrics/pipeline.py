@@ -5,7 +5,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import fmean
-from typing import Dict, List
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -13,6 +13,8 @@ import pandas as pd
 from .config import PipelineConfig
 from .models_emotion import EMOTION_LABELS, EmotionSimilarityEngine
 from .models_face import FaceObservation, FaceSimilarityEngine
+
+ProgressCallback = Optional[Callable[[str, int], None]]
 
 
 @dataclass
@@ -39,16 +41,20 @@ class MetricsPipeline:
         self.face_engine = face_engine or FaceSimilarityEngine(device=config.device, lpips_distance_max=config.lpips_distance_max)
         self.emotion_engine = emotion_engine or EmotionSimilarityEngine()
 
-    def run(self) -> pd.DataFrame:
+    def run(self, progress_callback: ProgressCallback = None) -> pd.DataFrame:
         records: List[Dict[str, float | str]] = []
         input_files = self._enumerate_inputs()
         if self.config.max_files is not None:
             input_files = input_files[: self.config.max_files]
+        if progress_callback:
+            progress_callback("start", len(input_files))
         for input_file in input_files:
             relative_path = input_file.relative_to(self.config.input_dir).as_posix()
             output_file = self.config.output_dir / input_file.relative_to(self.config.input_dir)
             if not output_file.exists():
                 logging.warning("Missing output file for %s", relative_path)
+                if progress_callback:
+                    progress_callback("update", 1)
                 continue
             observations = self._analyze_file(input_file, output_file)
             metrics = self._aggregate_observations(observations)
@@ -61,6 +67,8 @@ class MetricsPipeline:
                 "deepface_percent": metrics["deepface_percent"],
             }
             records.append(record)
+            if progress_callback:
+                progress_callback("update", 1)
         columns = [
             "filename",
             "facenet_percent",
@@ -78,7 +86,8 @@ class MetricsPipeline:
         for candidate in self.config.input_dir.rglob("*"):
             if candidate.is_file() and candidate.suffix.lower() in self.config.file_extensions:
                 paths.append(candidate)
-        return sorted(paths)
+        paths.sort(key=lambda path: path.relative_to(self.config.input_dir).as_posix())
+        return paths
 
     def _analyze_file(self, input_file: Path, output_file: Path) -> List[FaceObservation]:
         suffix = input_file.suffix.lower()
