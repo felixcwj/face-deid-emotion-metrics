@@ -18,7 +18,8 @@
 - Missing faces default to zeroed metrics so every file yields a row.
 
 ## Excel formatting
-- Headers: filename, FaceNet %, LPIPS %, Final %, FER %, DeepFace %.
+- Headers: filename, FaceNet %, LPIPS %, Final %, FER %, DeepFace %, Person count, Duration.
 - All cells centered; filename column auto-widened.
-- Column 4 text bold.
-- Thick borders between columns C|D and D|E to highlight FaceNet/LPIPS vs. Final vs. emotions.
+- Column 4 text bold with thick separators between columns C|D and D|E to highlight FaceNet/LPIPS vs. Final vs. emotions.
+- Metric columns show one decimal place, Person count is an integer, Duration is populated for `.mp4` rows.
+- Header separator, table frame, and last data row use thick borders.

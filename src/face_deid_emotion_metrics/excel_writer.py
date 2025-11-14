@@ -16,6 +16,8 @@ class ExcelWriter:
         "Final score (%)",
         "FER emotion (%)",
         "DeepFace emotion (%)",
+        "Person count",
+        "Duration",
     ]
 
     def write(self, data: object, output_path: Path) -> None:
@@ -34,6 +36,8 @@ class ExcelWriter:
                     float(record.get("final_percent", 0.0)),
                     float(record.get("fer_percent", 0.0)),
                     float(record.get("deepface_percent", 0.0)),
+                    int(record.get("person_count", 0)),
+                    record.get("duration_label", ""),
                 ]
             )
         self._format_sheet(sheet)
@@ -57,25 +61,20 @@ class ExcelWriter:
         for row in sheet.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
             for cell in row:
                 cell.alignment = alignment
-                row_index = cell.row
-                col_index = cell.column
-                left = thick if col_index == 1 else None
-                right = thick if col_index == max_col else None
-                top = thick if row_index == 1 else None
-                bottom = None
-                if row_index == 1:
-                    bottom = thick
-                if row_index == max_row:
-                    bottom = thick
-                self._apply_border(cell, left=left, right=right, top=top, bottom=bottom)
             row[3].font = bold_font
-        for row in sheet.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
-            self._apply_border(row[2], right=thick)
-            self._apply_border(row[3], left=thick, right=thick)
-            self._apply_border(row[4], left=thick)
+        for col in range(1, max_col + 1):
+            self._apply_border(sheet.cell(row=1, column=col), top=thick, bottom=thick)
+            self._apply_border(sheet.cell(row=max_row, column=col), bottom=thick)
+        for row in range(1, max_row + 1):
+            self._apply_border(sheet.cell(row=row, column=1), left=thick)
+            self._apply_border(sheet.cell(row=row, column=max_col), right=thick)
+            self._apply_border(sheet.cell(row=row, column=3), right=thick)
+            self._apply_border(sheet.cell(row=row, column=4), left=thick, right=thick)
+            self._apply_border(sheet.cell(row=row, column=5), left=thick)
         for row_index in range(2, max_row + 1):
-            for col_index in range(2, max_col + 1):
+            for col_index in (2, 3, 4, 5, 6):
                 sheet.cell(row=row_index, column=col_index).number_format = "0.0"
+            sheet.cell(row=row_index, column=7).number_format = "0"
         self._set_column_widths(sheet)
 
     def _apply_border(self, cell, left: Side | None = None, right: Side | None = None, top: Side | None = None, bottom: Side | None = None) -> None:
@@ -92,5 +91,7 @@ class ExcelWriter:
         sheet.column_dimensions["B"].width = 14
         sheet.column_dimensions["C"].width = 12
         sheet.column_dimensions["D"].width = 16
-        sheet.column_dimensions["E"].width = 20
-        sheet.column_dimensions["F"].width = 22
+        sheet.column_dimensions["E"].width = 22
+        sheet.column_dimensions["F"].width = 24
+        sheet.column_dimensions["G"].width = 14
+        sheet.column_dimensions["H"].width = 14

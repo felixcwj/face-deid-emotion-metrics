@@ -7,6 +7,7 @@ from pathlib import Path
 from statistics import fmean
 from typing import Callable, Dict, List, Optional, Tuple
 
+import cv2
 import numpy as np
 import pandas as pd
 
@@ -50,7 +51,8 @@ class MetricsPipeline:
             progress_callback("start", len(matched_pairs))
         for relative_path, input_file, output_file in matched_pairs:
             observations = self._analyze_file(input_file, output_file)
-            metrics = self._aggregate_observations(observations)
+            metrics, person_count = self._aggregate_observations(observations)
+            duration_label = self._video_duration_label(input_file) if input_file.suffix.lower() == ".mp4" else ""
             record = {
                 "filename": relative_path,
                 "facenet_percent": metrics["facenet_percent"],
@@ -58,6 +60,8 @@ class MetricsPipeline:
                 "final_percent": metrics["final_percent"],
                 "fer_percent": metrics["fer_percent"],
                 "deepface_percent": metrics["deepface_percent"],
+                "person_count": person_count,
+                "duration_label": duration_label,
             }
             records.append(record)
             if progress_callback:
@@ -69,6 +73,8 @@ class MetricsPipeline:
             "final_percent",
             "fer_percent",
             "deepface_percent",
+            "person_count",
+            "duration_label",
         ]
         if not records:
             return pd.DataFrame(columns=columns)
@@ -97,9 +103,9 @@ class MetricsPipeline:
             return self.face_engine.analyze_video_pair(input_file, output_file, self.config.max_frames_per_video)
         return self.face_engine.analyze_image_pair(input_file, output_file)
 
-    def _aggregate_observations(self, observations: List[FaceObservation]) -> Dict[str, float]:
+    def _aggregate_observations(self, observations: List[FaceObservation]) -> Tuple[Dict[str, float], int]:
         if not observations:
-            return self._blank_metrics()
+            return self._blank_metrics(), 0
         persons: Dict[str, PersonAccumulator] = defaultdict(PersonAccumulator)
         for observation in observations:
             fer_original, deep_original = self.emotion_engine.emotion_vectors(observation.original_face)
@@ -125,13 +131,14 @@ class MetricsPipeline:
             final_scores.append(final_score)
             fer_scores.append(fer_similarity)
             deep_scores.append(deep_similarity)
-        return {
+        metrics = {
             "facenet_percent": self._mean(facenet_scores),
             "lpips_percent": self._mean(style_scores),
             "final_percent": self._mean(final_scores),
             "fer_percent": self._mean(fer_scores),
             "deepface_percent": self._mean(deep_scores),
         }
+        return metrics, len(persons)
 
     def _mean(self, values: List[float]) -> float:
         if not values:
@@ -156,3 +163,18 @@ class MetricsPipeline:
             "fer_percent": 0.0,
             "deepface_percent": 0.0,
         }
+
+    def _video_duration_label(self, path: Path) -> str:
+        cap = cv2.VideoCapture(str(path))
+        try:
+            fps = cap.get(cv2.CAP_PROP_FPS) or 0
+            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+        finally:
+            cap.release()
+        if fps <= 0 or frame_count <= 0:
+            return ""
+        seconds = int(round(frame_count / fps))
+        minutes, secs = divmod(seconds, 60)
+        if minutes:
+            return f"{minutes}m {secs}s"
+        return f"{secs}s"

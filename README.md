@@ -44,25 +44,30 @@ base_dir/
 ## Excel report
 
 Each processed file (including both `.jpg` stills and `.mp4` videos) produces one row with columns:
-1. filename (relative path under `input/`)
+1. filename (relative path under `input/`, extension included so `.jpg` and `.mp4` appear separately)
 2. FaceNet (%)
 3. LPIPS (%)
 4. Final score (%)
 5. FER emotion (%)
 6. DeepFace emotion (%)
+7. Person count
+8. Duration (mp4 only)
 
 Formatting rules:
 - Filename column auto-expands to fit the longest path.
-- Metric headers and values stay centered with one decimal place.
+- Metric headers and values stay centered with one decimal place. Person count is an integer, Duration is text such as `45s` or `2m 10s`.
 - Final score (%) stays bold and sits between thick vertical borders (LPIPS | Final) and (Final | FER).
 - The header row, table frame, and last data row are outlined with thick borders so the table reads well in Excel.
+- Columns E/F are widened so `FER emotion (%)` and `DeepFace emotion (%)` are fully visible in a fresh workbook.
+- **Person count** is the number of distinct tracked identities (faces) detected in that file (images count detections in a single frame, videos count unique tracks across sampled frames).
+- **Duration** is filled for `.mp4` rows using the rounded runtime (for example `58s` or `1m 42s`). Still-image rows keep the Duration cell empty.
 
 ## Requirements
 
 - Windows 10+, PowerShell 7+
-- NVIDIA GPU with CUDA-capable drivers (reference: GeForce RTX 3060, 12 GB VRAM)
+- NVIDIA GPU with CUDA-capable drivers (reference: GeForce RTX 3060, 12 GB VRAM). PyTorch must detect this GPU (`torch.cuda.is_available()`).
 - Python 3.10+
-- CUDA-enabled builds of PyTorch (or DirectML wheels if CUDA is unavailable)
+- CUDA-enabled builds of PyTorch (the CLI fails fast if CUDA is missing)
 
 ## Setup
 
@@ -94,7 +99,7 @@ Add `--max-files N` to process only the first `N` matched file pairs (sorted by 
 
 ## Output
 
-The pipeline writes a single Excel workbook summarizing all files. The Final score column is bold and separated by thick borders so reviewers can quickly distinguish identity/style metrics from FER/DeepFace emotion metrics.
+The pipeline writes a single Excel workbook summarizing all files with the columns listed above. Each `.jpg` and `.mp4` appears as its own row, FaceNet/LPIPS/Final/FER/DeepFace values keep one decimal, the Final score column remains bold, Person count reflects the number of tracked identities in that file, and Duration is filled for videos only.
 
 ## Run on D:\RAPA from a fresh PowerShell 7 session
 
