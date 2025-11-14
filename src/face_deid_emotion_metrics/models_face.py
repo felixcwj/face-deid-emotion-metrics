@@ -66,9 +66,9 @@ class FaceTrackManager:
 
 
 class FaceSimilarityEngine:
-    def __init__(self, lpips_distance_max: float = 1.0, track_threshold: float = 0.5, device: str | None = None) -> None:
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.detector = MTCNN(keep_all=True, device=self.device)
+    def __init__(self, device: torch.device, lpips_distance_max: float = 1.0, track_threshold: float = 0.5) -> None:
+        self.device = device
+        self.detector = MTCNN(keep_all=True, device=str(self.device))
         self.embedder = InceptionResnetV1(pretrained="vggface2").eval().to(self.device)
         self.lpips_model = lpips.LPIPS(net="vgg").to(self.device)
         self.lpips_distance_max = lpips_distance_max

@@ -36,12 +36,15 @@ class PersonAccumulator:
 class MetricsPipeline:
     def __init__(self, config: PipelineConfig, face_engine: FaceSimilarityEngine | None = None, emotion_engine: EmotionSimilarityEngine | None = None) -> None:
         self.config = config
-        self.face_engine = face_engine or FaceSimilarityEngine(lpips_distance_max=config.lpips_distance_max)
+        self.face_engine = face_engine or FaceSimilarityEngine(device=config.device, lpips_distance_max=config.lpips_distance_max)
         self.emotion_engine = emotion_engine or EmotionSimilarityEngine()
 
     def run(self) -> pd.DataFrame:
         records: List[Dict[str, float | str]] = []
-        for input_file in self._enumerate_inputs():
+        input_files = self._enumerate_inputs()
+        if self.config.max_files is not None:
+            input_files = input_files[: self.config.max_files]
+        for input_file in input_files:
             relative_path = input_file.relative_to(self.config.input_dir).as_posix()
             output_file = self.config.output_dir / input_file.relative_to(self.config.input_dir)
             if not output_file.exists():

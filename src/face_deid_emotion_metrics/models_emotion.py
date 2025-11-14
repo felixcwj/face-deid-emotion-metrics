@@ -13,7 +13,6 @@ EMOTION_LABELS = ["angry", "disgust", "fear", "happy", "sad", "surprise", "neutr
 class EmotionSimilarityEngine:
     def __init__(self) -> None:
         self.fer_model = FER(mtcnn=False)
-        self.deepface_model = DeepFace.build_model("Emotion")
 
     def emotion_vectors(self, image: Image.Image) -> Tuple[np.ndarray, np.ndarray]:
         fer_vector = self._fer_vector(image)
@@ -42,8 +41,8 @@ class EmotionSimilarityEngine:
             actions=["emotion"],
             enforce_detection=False,
             detector_backend="skip",
-            models={"emotion": self.deepface_model},
-            prog_bar=False,
+            align=False,
+            silent=True,
         )
         result = analysis[0] if isinstance(analysis, list) else analysis
         emotions = result.get("emotion", {})
