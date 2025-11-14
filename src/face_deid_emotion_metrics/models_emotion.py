@@ -5,7 +5,7 @@ from typing import Tuple
 import numpy as np
 from PIL import Image
 from deepface import DeepFace
-from fer import FER
+from fer.fer import FER
 
 EMOTION_LABELS = ["angry", "disgust", "fear", "happy", "sad", "surprise", "neutral"]
 

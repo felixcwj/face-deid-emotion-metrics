@@ -1,1 +1,8 @@
-from importlib.metadata import PackageNotFoundError, version\n\ntry:\n    __version__ = version('face-deid-emotion-metrics')\nexcept PackageNotFoundError:\n    __version__ = '0.0.0'\n\n__all__ = ['__version__']\n
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("face-deid-emotion-metrics")
+except PackageNotFoundError:
+    __version__ = "0.0.0"
+
+__all__ = ["__version__"]
