@@ -101,7 +101,73 @@ Add `--max-files N` to process only the first `N` matched file pairs (sorted by 
 
 The pipeline writes a single Excel workbook summarizing all files with the columns listed above. Each `.jpg` and `.mp4` appears as its own row, FaceNet/LPIPS/Final/FER/DeepFace values keep one decimal, the Final score column remains bold, Person count reflects the number of tracked identities in that file, and Duration is filled for videos only.
 
-## Run on D:\RAPA from a fresh PowerShell 7 session
+## Recommended: WSL2 Ubuntu GPU-only workflow
+
+For large datasets and strict GPU-only DeepFace/FER execution, run the pipeline inside WSL2 Ubuntu.
+
+### A. Enter Ubuntu from Windows PowerShell
+
+```powershell
+wsl -d Ubuntu
+```
+
+Replace `Ubuntu` with the distro name shown by `wsl -l -v` if needed.
+
+### B. One-time setup inside Ubuntu
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip python3-dev build-essential git
+
+cd /mnt/c/projects/face-deid-emotion-metrics
+
+python3 -m venv .venv_wsl
+source .venv_wsl/bin/activate
+
+export PIP_BREAK_SYSTEM_PACKAGES=1
+
+python -m pip install --upgrade pip
+
+pip install "torch==2.5.1" "torchvision==0.20.1" --index-url https://download.pytorch.org/whl/cu121
+
+pip install "tensorflow[and-cuda]"
+
+pip install -r requirements.txt
+pip install -e .
+```
+
+Notes:
+- Inside `.venv_wsl`, `python --version` typically reports Python 3.12.x.
+- Quick GPU checks:
+  - PyTorch: `python - <<'PY'\nimport torch\nprint(torch.__version__)\nprint(torch.cuda.is_available())\nprint(torch.cuda.get_device_name(0))\nPY`
+  - TensorFlow: `python - <<'PY'\nimport tensorflow as tf\nprint(tf.__version__)\nprint(tf.config.list_physical_devices('GPU'))\nPY`
+- See [docs/wsl_gpu_setup.md](docs/wsl_gpu_setup.md) for more detail (listing distros, running `nvidia-smi`, etc.).
+
+### C. Full RAPA run from WSL (GPU-only)
+
+From Windows PowerShell 7:
+
+```powershell
+wsl -d Ubuntu
+```
+
+Then inside Ubuntu:
+
+```bash
+cd /mnt/c/projects/face-deid-emotion-metrics
+source .venv_wsl/bin/activate
+export PIP_BREAK_SYSTEM_PACKAGES=1
+
+python -m face_deid_emotion_metrics.cli \
+  --base-dir "/mnt/d/RAPA" \
+  --output "/mnt/d/RAPA/rapa_report_full_wsl.xlsx"
+```
+
+`/mnt/d/RAPA` corresponds to `D:\RAPA`. The CLI prints `Using device: cuda:0`, shows a tqdm bar with 0.1% resolution, and writes `rapa_report_full_wsl.xlsx` with all eight columns (filename, FaceNet (%), LPIPS (%), Final score (%), FER emotion (%), DeepFace emotion (%), Person count, Duration).
+
+### Windows-only quick test (optional)
+
+For small samples or debugging:
 
 ```powershell
 pwsh
@@ -114,4 +180,4 @@ pip install -e .
 python -m face_deid_emotion_metrics.cli --base-dir D:\RAPA --output D:\RAPA\rapa_report_full.xlsx
 ```
 
-You should see `Using device: cuda:0` and a live progress bar. If CUDA is unavailable, the run will abort immediately so you can fix the GPU environment before rerunning.
+Use `--max-files N` for quick checks. For production-scale runs and guaranteed GPU use, prefer the WSL2 Ubuntu flow above.
