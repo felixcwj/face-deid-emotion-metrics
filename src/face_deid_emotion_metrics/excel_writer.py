@@ -92,5 +92,5 @@ class ExcelWriter:
         sheet.column_dimensions["B"].width = 14
         sheet.column_dimensions["C"].width = 12
         sheet.column_dimensions["D"].width = 16
-        sheet.column_dimensions["E"].width = 16
-        sheet.column_dimensions["F"].width = 18
+        sheet.column_dimensions["E"].width = 20
+        sheet.column_dimensions["F"].width = 22

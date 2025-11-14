@@ -46,7 +46,7 @@ def main() -> None:
         max_files=args.max_files,
     )
     pipeline = MetricsPipeline(config)
-    progress_bar = tqdm(total=0, unit="file", bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {percentage:3.0f}%]")
+    progress_bar = tqdm(total=0, unit="file", bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {percentage:5.1f}%]")
 
     def progress_callback(event: str, value: int) -> None:
         if event == "start":

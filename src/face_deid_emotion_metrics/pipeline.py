@@ -5,7 +5,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import fmean
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -43,19 +43,12 @@ class MetricsPipeline:
 
     def run(self, progress_callback: ProgressCallback = None) -> pd.DataFrame:
         records: List[Dict[str, float | str]] = []
-        input_files = self._enumerate_inputs()
+        matched_pairs = self._matched_pairs()
         if self.config.max_files is not None:
-            input_files = input_files[: self.config.max_files]
+            matched_pairs = matched_pairs[: self.config.max_files]
         if progress_callback:
-            progress_callback("start", len(input_files))
-        for input_file in input_files:
-            relative_path = input_file.relative_to(self.config.input_dir).as_posix()
-            output_file = self.config.output_dir / input_file.relative_to(self.config.input_dir)
-            if not output_file.exists():
-                logging.warning("Missing output file for %s", relative_path)
-                if progress_callback:
-                    progress_callback("update", 1)
-                continue
+            progress_callback("start", len(matched_pairs))
+        for relative_path, input_file, output_file in matched_pairs:
             observations = self._analyze_file(input_file, output_file)
             metrics = self._aggregate_observations(observations)
             record = {
@@ -81,13 +74,22 @@ class MetricsPipeline:
             return pd.DataFrame(columns=columns)
         return pd.DataFrame(records, columns=columns)
 
-    def _enumerate_inputs(self) -> List[Path]:
-        paths: List[Path] = []
+    def _matched_pairs(self) -> List[Tuple[str, Path, Path]]:
+        files: List[Path] = []
         for candidate in self.config.input_dir.rglob("*"):
             if candidate.is_file() and candidate.suffix.lower() in self.config.file_extensions:
-                paths.append(candidate)
-        paths.sort(key=lambda path: path.relative_to(self.config.input_dir).as_posix())
-        return paths
+                files.append(candidate)
+        files.sort(key=lambda path: path.relative_to(self.config.input_dir).as_posix())
+        pairs: List[Tuple[str, Path, Path]] = []
+        for input_path in files:
+            relative = input_path.relative_to(self.config.input_dir)
+            relative_str = relative.as_posix()
+            output_path = self.config.output_dir / relative
+            if not output_path.exists():
+                logging.warning("Missing output file for %s", relative_str)
+                continue
+            pairs.append((relative_str, input_path, output_path))
+        return pairs
 
     def _analyze_file(self, input_file: Path, output_file: Path) -> List[FaceObservation]:
         suffix = input_file.suffix.lower()

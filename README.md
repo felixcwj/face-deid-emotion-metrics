@@ -43,7 +43,7 @@ base_dir/
 
 ## Excel report
 
-Each processed file produces one row with columns:
+Each processed file (including both `.jpg` stills and `.mp4` videos) produces one row with columns:
 1. filename (relative path under `input/`)
 2. FaceNet (%)
 3. LPIPS (%)

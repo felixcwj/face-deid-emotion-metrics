@@ -8,8 +8,9 @@ import cv2
 import lpips
 import numpy as np
 import torch
+import torch.nn.functional as F
 from PIL import Image
-from facenet_pytorch import InceptionResnetV1, MTCNN, fixed_image_standardization
+from facenet_pytorch import InceptionResnetV1, MTCNN
 from torchvision import transforms
 
 
@@ -73,11 +74,6 @@ class FaceSimilarityEngine:
         self.lpips_model = lpips.LPIPS(net="vgg").to(self.device)
         self.lpips_distance_max = lpips_distance_max
         self.track_threshold = track_threshold
-        self.embedding_transform = transforms.Compose([
-            transforms.Resize((160, 160)),
-            transforms.ToTensor(),
-            fixed_image_standardization,
-        ])
         self.lpips_transform = transforms.Compose([
             transforms.Resize((256, 256)),
             transforms.ToTensor(),
@@ -143,31 +139,30 @@ class FaceSimilarityEngine:
         return image.convert("RGB")
 
     def _detect_faces(self, image: Image.Image) -> List[FaceDescriptor]:
-        boxes, _ = self.detector.detect(image)
+        boxes, probs = self.detector.detect(image)
         descriptors: List[FaceDescriptor] = []
         if boxes is None:
             return descriptors
+        face_tensors = self.detector.extract(image, boxes, save_path=None)
+        if face_tensors is None or len(face_tensors) == 0:
+            return descriptors
+        if isinstance(face_tensors, torch.Tensor):
+            tensors = face_tensors
+        else:
+            tensors = torch.stack(face_tensors)
         width, height = image.size
-        for box in boxes:
-            x1, y1, x2, y2 = [int(max(0, value)) for value in box]
-            x1 = min(x1, width)
-            y1 = min(y1, height)
-            x2 = min(max(x2, x1 + 1), width)
-            y2 = min(max(y2, y1 + 1), height)
-            crop = image.crop((x1, y1, x2, y2))
-            embedding = self._embed_face(crop)
-            descriptors.append(FaceDescriptor(crop, embedding, (x1, y1, x2, y2)))
+        for idx, box in enumerate(boxes):
+            prob = probs[idx] if probs is not None else 1.0
+            if prob is None or prob <= 0:
+                continue
+            face_tensor = tensors[idx]
+            bbox = self._clip_box(box, width, height)
+            if bbox is None:
+                continue
+            crop = image.crop(bbox)
+            embedding = self._embed_face_tensor(face_tensor)
+            descriptors.append(FaceDescriptor(crop, embedding, bbox))
         return descriptors
-
-    def _embed_face(self, image: Image.Image) -> np.ndarray:
-        tensor = self.embedding_transform(image).unsqueeze(0).to(self.device)
-        with torch.no_grad():
-            embedding = self.embedder(tensor)
-        vector = embedding.cpu().numpy()[0]
-        norm = np.linalg.norm(vector)
-        if norm == 0:
-            return vector
-        return vector / norm
 
     def _match_pairs(self, faces_a: Sequence[FaceDescriptor], faces_b: Sequence[FaceDescriptor]) -> List[Tuple[int, int, float]]:
         if not faces_a or not faces_b:
@@ -197,12 +192,30 @@ class FaceSimilarityEngine:
         return float(max(0.0, min(100.0, percent)))
 
     def _cosine_similarity(self, embedding_a: np.ndarray, embedding_b: np.ndarray) -> float:
-        tensor_a = torch.from_numpy(embedding_a.astype(np.float32, copy=False)).to(self.device)
-        tensor_b = torch.from_numpy(embedding_b.astype(np.float32, copy=False)).to(self.device)
-        tensor_a = torch.nn.functional.normalize(tensor_a, dim=0)
-        tensor_b = torch.nn.functional.normalize(tensor_b, dim=0)
-        similarity = torch.nn.functional.cosine_similarity(tensor_a.unsqueeze(0), tensor_b.unsqueeze(0))
-        return float(similarity.item())
+        value = float(np.dot(embedding_a, embedding_b))
+        return float(np.clip(value, -1.0, 1.0))
+
+    def _embed_face_tensor(self, face_tensor: torch.Tensor) -> np.ndarray:
+        if face_tensor.ndim == 3:
+            face_tensor = face_tensor.unsqueeze(0)
+        face_tensor = face_tensor.to(self.device)
+        with torch.no_grad():
+            embedding = self.embedder(face_tensor)
+        vector = F.normalize(embedding, dim=1)[0]
+        return vector.detach().cpu().numpy().astype(np.float32)
+
+    def _clip_box(self, box: Sequence[float], width: int, height: int) -> Tuple[int, int, int, int] | None:
+        if box is None or len(box) < 4:
+            return None
+        x1 = int(max(0, box[0]))
+        y1 = int(max(0, box[1]))
+        x2 = int(max(0, box[2]))
+        y2 = int(max(0, box[3]))
+        x1 = min(x1, width)
+        y1 = min(y1, height)
+        x2 = min(max(x2, x1 + 1), width)
+        y2 = min(max(y2, y1 + 1), height)
+        return x1, y1, x2, y2
 
     def _style_percent(self, image_a: Image.Image, image_b: Image.Image) -> float:
         tensor_a = self._lpips_tensor(image_a)
