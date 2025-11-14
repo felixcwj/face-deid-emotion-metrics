@@ -181,3 +181,15 @@ python -m face_deid_emotion_metrics.cli --base-dir D:\RAPA --output D:\RAPA\rapa
 ```
 
 Use `--max-files N` for quick checks. For production-scale runs and guaranteed GPU use, prefer the WSL2 Ubuntu flow above.
+
+#### Interactive PowerShell shortcut (`deid`)
+
+To trigger a guided run from Windows PowerShell:
+
+```powershell
+Set-Location C:\projects\face-deid-emotion-metrics
+Set-Alias deid C:\projects\face-deid-emotion-metrics\scripts\deid.ps1
+deid
+```
+
+The script will prompt for the dataset folder (e.g., `D:\RAPA`), an output path (defaults to `<base>\rapa_report_interactive.xlsx`), and ask for confirmation (`Y`). Entering `Y` starts the pipeline; any other response cancels it.
