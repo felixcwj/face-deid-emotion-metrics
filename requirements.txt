@@ -1,0 +1,1 @@
+torch\ntorchvision\nfacenet-pytorch\nlpips\nnumpy\npandas\npillow\nopencv-python\nopenpyxl\nfer\ndeepface\n
