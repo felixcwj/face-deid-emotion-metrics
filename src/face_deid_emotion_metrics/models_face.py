@@ -67,13 +67,14 @@ class FaceTrackManager:
 
 
 class FaceSimilarityEngine:
-    def __init__(self, device: torch.device, lpips_distance_max: float = 1.0, track_threshold: float = 0.5) -> None:
+    def __init__(self, device: torch.device, lpips_distance_max: float = 1.0, track_threshold: float = 0.5, video_batch_size: int = 4) -> None:
         self.device = device
         self.detector = MTCNN(keep_all=True, device=self.device)
         self.embedder = InceptionResnetV1(pretrained="vggface2").eval().to(self.device)
         self.lpips_model = lpips.LPIPS(net="vgg").to(self.device)
         self.lpips_distance_max = lpips_distance_max
         self.track_threshold = track_threshold
+        self.video_batch_size = max(1, video_batch_size)
         self.lpips_transform = transforms.Compose([
             transforms.Resize((256, 256)),
             transforms.ToTensor(),
@@ -106,9 +107,9 @@ class FaceSimilarityEngine:
         frames_a, frames_b = self._paired_video_frames(original_path, deidentified_path, max_frames)
         observations: List[FaceObservation] = []
         track_manager = FaceTrackManager(threshold=self.track_threshold)
-        for frame_a, frame_b in zip(frames_a, frames_b):
-            descriptors_a = self._detect_faces(frame_a)
-            descriptors_b = self._detect_faces(frame_b)
+        descriptors_a_sequence = self._detect_faces_in_batches(frames_a)
+        descriptors_b_sequence = self._detect_faces_in_batches(frames_b)
+        for descriptors_a, descriptors_b in zip(descriptors_a_sequence, descriptors_b_sequence):
             if not descriptors_a or not descriptors_b:
                 continue
             track_ids: Dict[int, str] = {}
@@ -140,25 +141,61 @@ class FaceSimilarityEngine:
 
     def _detect_faces(self, image: Image.Image) -> List[FaceDescriptor]:
         boxes, probs = self.detector.detect(image)
-        descriptors: List[FaceDescriptor] = []
-        if boxes is None:
-            return descriptors
         face_tensors = self.detector.extract(image, boxes, save_path=None)
-        if face_tensors is None or len(face_tensors) == 0:
+        return self._build_descriptors(image, boxes, probs, face_tensors)
+
+    def _detect_faces_in_batches(self, images: Sequence[Image.Image]) -> List[List[FaceDescriptor]]:
+        if not images:
+            return []
+        descriptors: List[List[FaceDescriptor]] = []
+        for start in range(0, len(images), self.video_batch_size):
+            chunk = images[start : start + self.video_batch_size]
+            descriptors.extend(self._detect_faces_batch(chunk))
+        return descriptors
+
+    def _detect_faces_batch(self, images: Sequence[Image.Image]) -> List[List[FaceDescriptor]]:
+        if not images:
+            return []
+        boxes_batch, probs_batch = self.detector.detect(list(images))
+        tensors_batch = self.detector.extract(list(images), boxes_batch, save_path=None)
+        boxes_list = self._ensure_batch_list(boxes_batch, len(images))
+        probs_list = self._ensure_batch_list(probs_batch, len(images))
+        tensors_list = self._ensure_batch_list(tensors_batch, len(images))
+        descriptors_per_image: List[List[FaceDescriptor]] = []
+        for image, boxes, probs, tensors in zip(images, boxes_list, probs_list, tensors_list):
+            descriptors_per_image.append(self._build_descriptors(image, boxes, probs, tensors))
+        return descriptors_per_image
+
+    def _build_descriptors(
+        self,
+        image: Image.Image,
+        boxes: Sequence[Sequence[float]] | None,
+        probs: Sequence[float] | None,
+        face_tensors: torch.Tensor | Sequence[torch.Tensor] | None,
+    ) -> List[FaceDescriptor]:
+        descriptors: List[FaceDescriptor] = []
+        if boxes is None or face_tensors is None:
+            return descriptors
+        boxes_list = list(boxes)
+        if not boxes_list:
             return descriptors
         if isinstance(face_tensors, torch.Tensor):
             tensors = face_tensors
-        else:
+        elif isinstance(face_tensors, Sequence) and face_tensors:
             tensors = torch.stack(face_tensors)
+        else:
+            return descriptors
+        probs_list = self._ensure_list_length(probs, len(boxes_list))
         width, height = image.size
-        for idx, box in enumerate(boxes):
-            prob = probs[idx] if probs is not None else 1.0
-            if prob is None or prob <= 0:
+        for idx, box in enumerate(boxes_list):
+            prob_value = probs_list[idx]
+            prob = float(prob_value) if prob_value is not None else 1.0
+            if prob <= 0:
                 continue
-            face_tensor = tensors[idx]
             bbox = self._clip_box(box, width, height)
             if bbox is None:
                 continue
+            face_tensor = tensors[idx]
             crop = image.crop(bbox)
             embedding = self._embed_face_tensor(face_tensor)
             descriptors.append(FaceDescriptor(crop, embedding, bbox))
@@ -242,17 +279,15 @@ class FaceSimilarityEngine:
             if total <= 0:
                 return frames_a, frames_b
             indices = self._frame_indices(total, max_frames)
-            for index in indices:
-                frame_a = self._read_frame(cap_a, index)
-                frame_b = self._read_frame(cap_b, index)
-                if frame_a is None or frame_b is None:
-                    continue
-                frames_a.append(Image.fromarray(frame_a))
-                frames_b.append(Image.fromarray(frame_b))
+            frames_a = self._sample_frames(cap_a, indices)
+            frames_b = self._sample_frames(cap_b, indices)
         finally:
             cap_a.release()
             cap_b.release()
-        return frames_a, frames_b
+        paired = min(len(frames_a), len(frames_b))
+        if paired <= 0:
+            return [], []
+        return frames_a[:paired], frames_b[:paired]
 
     def _frame_indices(self, total: int, max_frames: int) -> List[int]:
         if total <= max_frames:
@@ -260,9 +295,60 @@ class FaceSimilarityEngine:
         positions = np.linspace(0, total - 1, num=max_frames, dtype=np.int32)
         return sorted(set(int(value) for value in positions))
 
-    def _read_frame(self, capture: cv2.VideoCapture, index: int) -> np.ndarray | None:
-        capture.set(cv2.CAP_PROP_POS_FRAMES, float(index))
-        success, frame = capture.read()
-        if not success or frame is None:
-            return None
-        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    def _sample_frames(self, capture: cv2.VideoCapture, indices: Sequence[int]) -> List[Image.Image]:
+        frames: List[Image.Image] = []
+        if not indices:
+            return frames
+        iterator = iter(indices)
+        try:
+            target = next(iterator)
+        except StopIteration:
+            return frames
+        current = 0
+        while True:
+            success, frame = capture.read()
+            if not success or frame is None:
+                break
+            if current == target:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frames.append(Image.fromarray(rgb))
+                try:
+                    target = next(iterator)
+                except StopIteration:
+                    break
+            current += 1
+        return frames
+
+    def _ensure_batch_list(self, values: object, length: int) -> List[object | None]:
+        if values is None:
+            result: List[object | None] = [None] * length
+        elif isinstance(values, list):
+            result = values
+        elif isinstance(values, tuple):
+            result = list(values)
+        else:
+            result = [values]
+        if len(result) < length:
+            result.extend([None] * (length - len(result)))
+        elif len(result) > length:
+            result = result[:length]
+        return result
+
+    def _ensure_list_length(self, values: Sequence[float] | None, length: int) -> List[float | None]:
+        if values is None:
+            return [None] * length
+        if isinstance(values, np.ndarray):
+            seq = values.tolist()
+        elif isinstance(values, torch.Tensor):
+            seq = values.detach().cpu().tolist()
+        elif isinstance(values, list):
+            seq = values
+        elif isinstance(values, tuple):
+            seq = list(values)
+        else:
+            seq = [values]
+        if len(seq) < length:
+            seq.extend([None] * (length - len(seq)))
+        elif len(seq) > length:
+            seq = seq[:length]
+        return seq
