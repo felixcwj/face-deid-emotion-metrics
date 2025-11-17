@@ -221,13 +221,18 @@ function Ensure-CudaToolkit {
         Write-Info "CUDA Toolkit 설치 프로그램을 실행합니다 (시간이 걸릴 수 있음)."
         Start-Process -FilePath $installerPath -ArgumentList "-s", "-loglevel:6" -Wait -NoNewWindow
         Remove-Item $installerPath -ErrorAction SilentlyContinue
-        if (Test-Path $defaultRoot) {
-            $versions = Get-ChildItem -Path $defaultRoot -Directory | Sort-Object -Property Name -Descending
-            foreach ($versionDir in $versions) {
-                if (Test-CudaToolkitPath -Path $versionDir.FullName) {
-                    return $versionDir.FullName
+        $pollDeadline = (Get-Date).AddMinutes(30)
+        while (Get-Date -lt $pollDeadline) {
+            if (Test-Path $defaultRoot) {
+                $versions = Get-ChildItem -Path $defaultRoot -Directory | Sort-Object -Property Name -Descending
+                foreach ($versionDir in $versions) {
+                    if (Test-CudaToolkitPath -Path $versionDir.FullName) {
+                        return $versionDir.FullName
+                    }
                 }
             }
+            Write-Info "CUDA 설치 대기 중... (15초 후 재확인)"
+            Start-Sleep -Seconds 15
         }
     }
     throw "CUDA Toolkit 경로를 찾을 수 없습니다. `-CudaToolkit` 인수로 올바른 경로를 지정하거나 CUDA Toolkit을 설치하세요."
