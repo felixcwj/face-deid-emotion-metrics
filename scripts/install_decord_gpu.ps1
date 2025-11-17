@@ -219,21 +219,34 @@ function Ensure-CudaToolkit {
         Write-Info "winget 사용 불가. NVIDIA CUDA 네트워크 인스톨러를 다운로드합니다."
         Download-File -Url $cudaInstallerUrl -Destination $installerPath
         Write-Info "CUDA Toolkit 설치 프로그램을 실행합니다 (시간이 걸릴 수 있음)."
-        Start-Process -FilePath $installerPath -ArgumentList "-s", "-loglevel:6" -Wait -NoNewWindow
+        $installStart = Get-Date
+        $installerProcess = Start-Process -FilePath $installerPath -ArgumentList @("-s", "-loglevel:6") -PassThru -WindowStyle Hidden
+        $installerProcess.WaitForExit()
         Remove-Item $installerPath -ErrorAction SilentlyContinue
-        $pollDeadline = (Get-Date).AddMinutes(30)
-        while (Get-Date -lt $pollDeadline) {
+        $pollStart = Get-Date
+        $pollDeadline = $pollStart.AddMinutes(30)
+        while ($true) {
             if (Test-Path $defaultRoot) {
                 $versions = Get-ChildItem -Path $defaultRoot -Directory | Sort-Object -Property Name -Descending
                 foreach ($versionDir in $versions) {
                     if (Test-CudaToolkitPath -Path $versionDir.FullName) {
+                        Write-Progress -Activity "CUDA Toolkit 설치 감지" -Completed -Status "감지 완료"
                         return $versionDir.FullName
                     }
                 }
             }
-            Write-Info "CUDA 설치 대기 중... (15초 후 재확인)"
+            $now = Get-Date
+            if ($now -ge $pollDeadline) {
+                break
+            }
+            $elapsedSeconds = ($now - $pollStart).TotalSeconds
+            $totalSeconds = ($pollDeadline - $pollStart).TotalSeconds
+            $percent = [math]::Min(99, ($elapsedSeconds / $totalSeconds) * 100)
+            $status = "경과 {0:N1}분 (최대 30분 대기)" -f ($elapsedSeconds / 60)
+            Write-Progress -Activity "CUDA Toolkit 설치 감지" -Status $status -PercentComplete $percent
             Start-Sleep -Seconds 15
         }
+        Write-Progress -Activity "CUDA Toolkit 설치 감지" -Completed -Status "타임아웃"
     }
     throw "CUDA Toolkit 경로를 찾을 수 없습니다. `-CudaToolkit` 인수로 올바른 경로를 지정하거나 CUDA Toolkit을 설치하세요."
 }
