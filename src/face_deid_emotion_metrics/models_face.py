@@ -12,6 +12,7 @@ from PIL import Image
 from decord import VideoReader as DecordVideoReader
 from decord import cpu as decord_cpu
 from decord import gpu as decord_gpu
+from decord._ffi.base import DECORDError
 from facenet_pytorch import InceptionResnetV1, MTCNN
 from torch.utils import dlpack as torch_dlpack
 from torchvision import transforms
@@ -297,7 +298,15 @@ class FaceSimilarityEngine:
         return decord_cpu(0)
 
     def _video_reader(self, path: Path) -> DecordVideoReader:
-        return DecordVideoReader(str(path), ctx=self._video_reader_context())
+        try:
+            return DecordVideoReader(str(path), ctx=self._video_reader_context())
+        except DECORDError as error:
+            message = (
+                "GPU 전용 decord 초기화에 실패했습니다. "
+                "scripts/install_decord_gpu.ps1 를 실행해 CUDA NVDEC 버전을 설치했는지 확인하세요. "
+                f"원본 오류: {error}"
+            )
+            raise RuntimeError(message) from error
 
     def _fetch_frames(self, reader: DecordVideoReader, indices: Sequence[int]) -> List[Image.Image]:
         if not indices:
