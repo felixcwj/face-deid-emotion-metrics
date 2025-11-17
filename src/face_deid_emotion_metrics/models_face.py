@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
@@ -13,12 +12,9 @@ from PIL import Image
 from decord import VideoReader as DecordVideoReader
 from decord import cpu as decord_cpu
 from decord import gpu as decord_gpu
-from decord._ffi.base import DECORDError
 from facenet_pytorch import InceptionResnetV1, MTCNN
 from torch.utils import dlpack as torch_dlpack
 from torchvision import transforms
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -82,7 +78,6 @@ class FaceSimilarityEngine:
         self.lpips_distance_max = lpips_distance_max
         self.track_threshold = track_threshold
         self.video_batch_size = max(1, video_batch_size)
-        self._decord_gpu_enabled = self.device.type == "cuda"
         self.lpips_transform = transforms.Compose([
             transforms.Resize((256, 256)),
             transforms.ToTensor(),
@@ -295,21 +290,14 @@ class FaceSimilarityEngine:
         positions = np.linspace(0, total - 1, num=max_frames, dtype=np.int32)
         return sorted(set(int(value) for value in positions))
 
-    def _video_reader_context(self, force_cpu: bool = False):
-        if not force_cpu and self._decord_gpu_enabled:
+    def _video_reader_context(self):
+        if self.device.type == "cuda":
             index = self.device.index if self.device.index is not None else 0
             return decord_gpu(index)
         return decord_cpu(0)
 
     def _video_reader(self, path: Path) -> DecordVideoReader:
-        try:
-            return DecordVideoReader(str(path), ctx=self._video_reader_context())
-        except DECORDError as error:
-            if self._decord_gpu_enabled:
-                logger.warning("Decord GPU decode unavailable (%s); falling back to CPU.", error)
-                self._decord_gpu_enabled = False
-                return DecordVideoReader(str(path), ctx=self._video_reader_context(force_cpu=True))
-            raise
+        return DecordVideoReader(str(path), ctx=self._video_reader_context())
 
     def _fetch_frames(self, reader: DecordVideoReader, indices: Sequence[int]) -> List[Image.Image]:
         if not indices:
