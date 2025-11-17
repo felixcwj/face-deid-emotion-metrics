@@ -2,6 +2,8 @@
 
 GPU-ready toolkit that evaluates how well face de-identification preserves identity and emotion cues. The pipeline scans any base directory with mirrored `input/` and `output/` trees, pairs every `.jpg` and `.mp4`, computes four metrics per file, and exports a formatted Excel report.
 
+> **Recommended runtime:** run the heavy pipeline inside WSL2 so CUDA inference and GPU video decoding stay on Linux. The default backend uses `ffmpeg -hwaccel cuda`; Windows-native Decord builds are now a fallback. See [docs/wsl.md](docs/wsl.md) for the full workflow.
+
 ## Expected folder structure
 
 ```
@@ -66,6 +68,24 @@ Formatting rules:
 - Python 3.10+
 - CUDA-enabled builds of PyTorch (the CLI fails fast if CUDA is missing)
 - All neural models (MTCNN detector, FaceNet, LPIPS head, EmotiEffLib) execute on the CUDA device; CPU load comes only from video decoding and general I/O.
+- FFmpeg 6.1+ with NVDEC (WSL `setup_env.sh` installs Ubuntu’s build, which already includes `cuda` in `ffmpeg -hwaccels`).
+
+## WSL2 automation (recommended)
+
+1. Bootstrap the Linux environment (runs inside WSL):
+   ```powershell
+   wsl.exe -- bash -lc "./scripts/wsl/setup_env.sh"
+   ```
+2. Launch the full pipeline from Windows (the script automatically activates `.venv_wsl` and keeps GPU work on `cuda:0`):
+   ```powershell
+   pwsh -File .\scripts\run_rapa_wsl.ps1 [-BaseDir D:\RAPA] [-Output D:\RAPA\rapa_report_full_wsl.xlsx] [-MaxFiles 16]
+   ```
+3. Optional GPU-decode smoke test:
+   ```powershell
+   wsl.exe -- bash -lc "source /mnt/c/projects/face-deid-emotion-metrics/.venv_wsl/bin/activate && python scripts/wsl/verify_gpu_decode.py --video /mnt/d/RAPA/input/sample.mp4"
+   ```
+
+More customization options (e.g., forwarding arbitrary CLI flags via `-AdditionalArgs`) live in [docs/wsl.md](docs/wsl.md).
 
 ## Setup
 
@@ -75,24 +95,16 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### GPU 비디오 디코더 자동 설치
+### GPU ���� ���ڴ� �ڵ� ��ġ (Legacy Windows-only)
 
-Decord는 Windows용으로 CPU 빌드만 배포되므로, `scripts/install_decord_gpu.ps1`가 자동으로 FFmpeg/Visual Studio Build Tools를 준비하고 CUDA 옵션으로 decord를 재빌드합니다. 한 번만 실행하면 되며 관리자 권한 PowerShell에서 다음 명령만 입력하면 됩니다.
-
-```powershell
-pwsh -File .\scripts\install_decord_gpu.ps1
-# 혹은 사용자 지정 경로를 원할 때
-pwsh -File .\scripts\install_decord_gpu.ps1 -InstallRoot C:\face_deid_decord -CudaToolkit "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6"
-```
-
-스크립트는 관리자 권한이 필수입니다. 실행 시 `C:\face_deid_decord`(기본값, `-InstallRoot`로 변경 가능)에 필요한 파일을 내려받고, Visual Studio Build Tools가 없으면 `winget`(또는 NVIDIA 공식 네트워크 인스톨러)을 사용해 CUDA Toolkit 12.6을 설치한 뒤 GPU 지원 decord wheel을 빌드합니다. 마지막으로 샘플 영상을 NVDEC으로 열어 GPU 경로가 정상인지 검증합니다. CUDA 설치 단계는 수 분이 걸릴 수 있습니다.
+WSL2 �� GPU ���� ���ο� �����ϴ� ��Ʈ������ ��õ�մϴ�. �׷��� WSL �� ��ġ�� �����ϴ� ���ɼ��� ���ٸ�, `scripts/install_decord_gpu.ps1`�� Windows �������� CUDA + Visual Studio Build Tools + FFmpeg�� ����� GPU decord wheel�� �����մϴ�. ��ũ��Ʈ�� ���� ���� PowerShell ���ɸ� �����մϴ�.
 
 ## Usage
 
 Run directly via the CLI (progress bar and `Using device: cuda:0` will appear when CUDA is active):
 
 ```powershell
-python -m face_deid_emotion_metrics.cli --base-dir D:\RAPA --output D:\RAPA\rapa_report.xlsx --max-frames-per-video 32 --style-threshold 70
+python -m face_deid_emotion_metrics.cli --base-dir D:\RAPA --output D:\RAPA\rapa_report.xlsx --max-frames-per-video 32 --style-threshold 70 --video-backend ffmpeg
 ```
 
 Use the PowerShell helper:
@@ -100,6 +112,17 @@ Use the PowerShell helper:
 ```powershell
 pwsh -File .\scripts\run_rapa.ps1
 ```
+
+Or leverage the single-command WSL wrapper (preferred for production-scale runs):
+
+```powershell
+pwsh -File .\scripts\run_rapa_wsl.ps1
+```
+
+### Video decoding backends
+
+- `ffmpeg` (default via `run_rapa_wsl.ps1`): invokes `ffmpeg -hwaccel cuda` to sample frames with NVDEC, no custom builds required on WSL.
+- `decord`: available for legacy Windows-only flows. Requires installing the CUDA-enabled Decord wheel (see below). Use `--video-backend decord` to force it.
 
 Adjust `--base-dir`, `--output`, `--max-frames-per-video`, `--style-threshold`, and `--lpips-distance-max` for future datasets.
 
@@ -151,3 +174,4 @@ deid
 ```
 
 The script prompts for the dataset folder (e.g., `D:\RAPA`), an output path (defaults to `<base>\rapa_report_interactive.xlsx`), and a final `Y` confirmation before launching the CLI. Any other response cancels the run.
+

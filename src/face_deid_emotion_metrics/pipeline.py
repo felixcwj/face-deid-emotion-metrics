@@ -15,7 +15,30 @@ from .config import PipelineConfig
 from .models_emotion import EmotionSimilarityEngine
 from .models_face import FaceObservation, FaceSimilarityEngine
 
-ProgressCallback = Optional[Callable[[str, int], None]]
+
+class _FileProgress:
+    def __init__(self, callback: ProgressCallback, relative_path: str) -> None:
+        self.callback = callback
+        self.relative_path = relative_path
+        self.update_raw("file_progress_start", percent=0.0, message="queued")
+
+    def update(self, percent: float, message: str) -> None:
+        percent = max(0.0, min(100.0, percent))
+        self.update_raw("file_progress", percent=percent, message=message)
+
+    def range_update(self, start: float, end: float, fraction: float, message: str) -> None:
+        span = max(0.0, min(1.0, fraction))
+        percent = start + (end - start) * span
+        self.update(percent, message)
+
+    def finish(self) -> None:
+        self.update_raw("file_progress_end", percent=100.0, message="done")
+
+    def update_raw(self, event: str, percent: float, message: str) -> None:
+        if self.callback:
+            self.callback(event, {"relative_path": self.relative_path, "percent": percent, "message": message})
+
+ProgressCallback = Optional[Callable[[str, object], None]]
 
 
 @dataclass
@@ -35,7 +58,11 @@ class PersonAccumulator:
 class MetricsPipeline:
     def __init__(self, config: PipelineConfig, face_engine: FaceSimilarityEngine | None = None, emotion_engine: EmotionSimilarityEngine | None = None) -> None:
         self.config = config
-        self.face_engine = face_engine or FaceSimilarityEngine(device=config.device, lpips_distance_max=config.lpips_distance_max)
+        self.face_engine = face_engine or FaceSimilarityEngine(
+            device=config.device,
+            lpips_distance_max=config.lpips_distance_max,
+            video_backend=config.video_backend,
+        )
         self.emotion_engine = emotion_engine or EmotionSimilarityEngine(device=config.device, model_name=config.emoti_model_name)
 
     def run(self, progress_callback: ProgressCallback = None) -> pd.DataFrame:
@@ -43,11 +70,16 @@ class MetricsPipeline:
         matched_pairs = self._matched_pairs()
         if self.config.max_files is not None:
             matched_pairs = matched_pairs[: self.config.max_files]
+        total_files = len(matched_pairs)
         if progress_callback:
-            progress_callback("start", len(matched_pairs))
-        for relative_path, input_file, output_file in matched_pairs:
-            observations = self._analyze_file(input_file, output_file)
+            progress_callback("start", total_files)
+        for index, (relative_path, input_file, output_file) in enumerate(matched_pairs, start=1):
+            file_progress = _FileProgress(progress_callback, relative_path)
+            file_progress.update(5.0, "loading files")
+            observations = self._analyze_file(input_file, output_file, file_progress)
+            file_progress.update(75.0, "emotion inference")
             metrics, person_count = self._aggregate_observations(observations)
+            file_progress.update(90.0, "aggregating metrics")
             duration_label = self._video_duration_label(input_file) if input_file.suffix.lower() == ".mp4" else ""
             record = {
                 "filename": relative_path,
@@ -59,6 +91,12 @@ class MetricsPipeline:
                 "duration_label": duration_label,
             }
             records.append(record)
+            if total_files:
+                percent = (index / total_files) * 100.0
+            else:
+                percent = 100.0
+            logging.info("Processed %s (%d/%d, %.2f%%)", relative_path, index, total_files, percent)
+            file_progress.finish()
             if progress_callback:
                 progress_callback("update", 1)
         columns = [
@@ -73,6 +111,7 @@ class MetricsPipeline:
         if not records:
             return pd.DataFrame(columns=columns)
         return pd.DataFrame(records, columns=columns)
+
 
     def _matched_pairs(self) -> List[Tuple[str, Path, Path]]:
         files: List[Path] = []
@@ -91,11 +130,20 @@ class MetricsPipeline:
             pairs.append((relative_str, input_path, output_path))
         return pairs
 
-    def _analyze_file(self, input_file: Path, output_file: Path) -> List[FaceObservation]:
+    def _analyze_file(self, input_file: Path, output_file: Path, file_progress: _FileProgress | None) -> List[FaceObservation]:
         suffix = input_file.suffix.lower()
         if suffix == ".mp4":
-            return self.face_engine.analyze_video_pair(input_file, output_file, self.config.max_frames_per_video)
-        return self.face_engine.analyze_image_pair(input_file, output_file)
+            return self.face_engine.analyze_video_pair(
+                input_file,
+                output_file,
+                self.config.max_frames_per_video,
+                progress_fn=lambda frac, msg: file_progress.range_update(5.0, 75.0, frac, msg) if file_progress else None,
+            )
+        return self.face_engine.analyze_image_pair(
+            input_file,
+            output_file,
+            progress_fn=lambda frac, msg: file_progress.range_update(5.0, 60.0, frac, msg) if file_progress else None,
+        )
 
     def _aggregate_observations(self, observations: List[FaceObservation]) -> Tuple[Dict[str, float], int]:
         if not observations:

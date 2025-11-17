@@ -9,14 +9,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image
-from decord import VideoReader as DecordVideoReader
-from decord import cpu as decord_cpu
-from decord import gpu as decord_gpu
-from decord._ffi.base import DECORDError
 from facenet_pytorch import InceptionResnetV1, MTCNN
-from torch.utils import dlpack as torch_dlpack
 from torchvision import transforms
 
+from .video_reader import VideoPairSampler, VideoSamplerConfig
 
 @dataclass
 class FaceDescriptor:
@@ -71,7 +67,7 @@ class FaceTrackManager:
 
 
 class FaceSimilarityEngine:
-    def __init__(self, device: torch.device, lpips_distance_max: float = 1.0, track_threshold: float = 0.5, video_batch_size: int = 4) -> None:
+    def __init__(self, device: torch.device, lpips_distance_max: float = 1.0, track_threshold: float = 0.5, video_batch_size: int = 4, video_backend: str = "decord") -> None:
         self.device = device
         self.detector = MTCNN(keep_all=True, device=self.device)
         self.embedder = InceptionResnetV1(pretrained="vggface2").eval().to(self.device)
@@ -79,17 +75,22 @@ class FaceSimilarityEngine:
         self.lpips_distance_max = lpips_distance_max
         self.track_threshold = track_threshold
         self.video_batch_size = max(1, video_batch_size)
+        self.video_sampler = VideoPairSampler(VideoSamplerConfig(device=device, backend=video_backend))
         self.lpips_transform = transforms.Compose([
             transforms.Resize((256, 256)),
             transforms.ToTensor(),
         ])
 
-    def analyze_image_pair(self, original_path: Path, deidentified_path: Path) -> List[FaceObservation]:
+    def analyze_image_pair(self, original_path: Path, deidentified_path: Path, progress_fn=None) -> List[FaceObservation]:
         original_image = self._load_image(original_path)
         deidentified_image = self._load_image(deidentified_path)
+        if progress_fn:
+            progress_fn(0.1, "detecting faces")
         descriptors_a = self._detect_faces(original_image)
         descriptors_b = self._detect_faces(deidentified_image)
         pairs = self._match_pairs(descriptors_a, descriptors_b)
+        if progress_fn:
+            progress_fn(0.6, "matching faces")
         observations: List[FaceObservation] = []
         for index, (i, j, similarity) in enumerate(pairs):
             descriptor_a = descriptors_a[i]
@@ -105,15 +106,20 @@ class FaceSimilarityEngine:
                     style_percent=style_percent,
                 )
             )
+        if progress_fn:
+            progress_fn(1.0, "faces analyzed")
         return observations
 
-    def analyze_video_pair(self, original_path: Path, deidentified_path: Path, max_frames: int) -> List[FaceObservation]:
+    def analyze_video_pair(self, original_path: Path, deidentified_path: Path, max_frames: int, progress_fn=None) -> List[FaceObservation]:
         frames_a, frames_b = self._paired_video_frames(original_path, deidentified_path, max_frames)
+        if progress_fn:
+            progress_fn(0.1, "frames decoded")
         observations: List[FaceObservation] = []
         track_manager = FaceTrackManager(threshold=self.track_threshold)
         descriptors_a_sequence = self._detect_faces_in_batches(frames_a)
         descriptors_b_sequence = self._detect_faces_in_batches(frames_b)
-        for descriptors_a, descriptors_b in zip(descriptors_a_sequence, descriptors_b_sequence):
+        total_batches = max(1, len(descriptors_a_sequence))
+        for batch_index, (descriptors_a, descriptors_b) in enumerate(zip(descriptors_a_sequence, descriptors_b_sequence), start=1):
             if not descriptors_a or not descriptors_b:
                 continue
             track_ids: Dict[int, str] = {}
@@ -137,6 +143,11 @@ class FaceSimilarityEngine:
                         style_percent=style_percent,
                     )
                 )
+            if progress_fn:
+                fraction = batch_index / total_batches
+                progress_fn(0.1 + 0.8 * min(1.0, fraction), f"processing frames {batch_index}/{total_batches}")
+        if progress_fn:
+            progress_fn(1.0, "faces analyzed")
         return observations
 
     def _load_image(self, path: Path) -> Image.Image:
@@ -183,17 +194,28 @@ class FaceSimilarityEngine:
         boxes_list = list(boxes)
         if not boxes_list:
             return descriptors
+        tensor_array: torch.Tensor
         if isinstance(face_tensors, torch.Tensor):
-            tensors = face_tensors
+            tensor_array = face_tensors
         elif isinstance(face_tensors, Sequence) and face_tensors:
-            tensors = torch.stack(face_tensors)
+            tensor_array = torch.stack(face_tensors)
         else:
             return descriptors
         probs_list = self._ensure_list_length(probs, len(boxes_list))
+        if tensor_array.ndim == 3:
+            tensor_array = tensor_array.unsqueeze(0)
+        if tensor_array.ndim < 4:
+            return descriptors
+        face_count = min(len(boxes_list), tensor_array.shape[0])
+        if face_count <= 0:
+            return descriptors
+        boxes_list = boxes_list[:face_count]
+        probs_list = probs_list[:face_count]
+        tensors = tensor_array[:face_count]
         width, height = image.size
         for idx, box in enumerate(boxes_list):
             prob_value = probs_list[idx]
-            prob = float(prob_value) if prob_value is not None else 1.0
+            prob = self._to_scalar(prob_value)
             if prob <= 0:
                 continue
             bbox = self._clip_box(box, width, height)
@@ -245,13 +267,19 @@ class FaceSimilarityEngine:
         vector = F.normalize(embedding, dim=1)[0]
         return vector.detach().cpu().numpy().astype(np.float32)
 
-    def _clip_box(self, box: Sequence[float], width: int, height: int) -> Tuple[int, int, int, int] | None:
-        if box is None or len(box) < 4:
+    def _clip_box(self, box: Sequence[float] | torch.Tensor | np.ndarray, width: int, height: int) -> Tuple[int, int, int, int] | None:
+        if box is None:
             return None
-        x1 = int(max(0, box[0]))
-        y1 = int(max(0, box[1]))
-        x2 = int(max(0, box[2]))
-        y2 = int(max(0, box[3]))
+        if isinstance(box, torch.Tensor):
+            values = box.detach().cpu().flatten().numpy()
+        else:
+            values = np.array(box, dtype=np.float32).flatten()
+        if values.size < 4:
+            return None
+        x1 = int(max(0.0, float(values[0])))
+        y1 = int(max(0.0, float(values[1])))
+        x2 = int(max(0.0, float(values[2])))
+        y2 = int(max(0.0, float(values[3])))
         x1 = min(x1, width)
         y1 = min(y1, height)
         x2 = min(max(x2, x1 + 1), width)
@@ -271,56 +299,23 @@ class FaceSimilarityEngine:
         tensor = self.lpips_transform(image).unsqueeze(0).to(self.device)
         return tensor * 2.0 - 1.0
 
-    def _paired_video_frames(self, path_a: Path, path_b: Path, max_frames: int) -> Tuple[List[Image.Image], List[Image.Image]]:
-        reader_a = self._video_reader(path_a)
-        reader_b = self._video_reader(path_b)
-        total = min(len(reader_a), len(reader_b))
-        if total <= 0:
-            return [], []
-        indices = self._frame_indices(total, max_frames)
-        frames_a = self._fetch_frames(reader_a, indices)
-        frames_b = self._fetch_frames(reader_b, indices)
-        paired = min(len(frames_a), len(frames_b))
-        if paired <= 0:
-            return [], []
-        return frames_a[:paired], frames_b[:paired]
-
-    def _frame_indices(self, total: int, max_frames: int) -> List[int]:
-        if total <= max_frames:
-            return list(range(total))
-        positions = np.linspace(0, total - 1, num=max_frames, dtype=np.int32)
-        return sorted(set(int(value) for value in positions))
-
-    def _video_reader_context(self):
-        if self.device.type == "cuda":
-            index = self.device.index if self.device.index is not None else 0
-            return decord_gpu(index)
-        return decord_cpu(0)
-
-    def _video_reader(self, path: Path) -> DecordVideoReader:
+    def _to_scalar(self, value: object) -> float:
+        if value is None:
+            return 1.0
+        if isinstance(value, (list, tuple)):
+            return float(value[0]) if value else 0.0
+        if isinstance(value, np.ndarray):
+            return float(value.reshape(-1)[0]) if value.size > 0 else 0.0
+        if isinstance(value, torch.Tensor):
+            flat = value.flatten()
+            return float(flat[0].item()) if flat.numel() else 0.0
         try:
-            return DecordVideoReader(str(path), ctx=self._video_reader_context())
-        except DECORDError as error:
-            message = (
-                "GPU 전용 decord 초기화에 실패했습니다. "
-                "scripts/install_decord_gpu.ps1 를 실행해 CUDA NVDEC 버전을 설치했는지 확인하세요. "
-                f"원본 오류: {error}"
-            )
-            raise RuntimeError(message) from error
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
 
-    def _fetch_frames(self, reader: DecordVideoReader, indices: Sequence[int]) -> List[Image.Image]:
-        if not indices:
-            return []
-        batch = reader.get_batch(list(indices))
-        torch_batch = torch_dlpack.from_dlpack(batch.to_dlpack())
-        frames: List[Image.Image] = []
-        for frame_tensor in torch_batch:
-            frames.append(self._tensor_to_image(frame_tensor))
-        return frames
-
-    def _tensor_to_image(self, frame_tensor: torch.Tensor) -> Image.Image:
-        array = frame_tensor.detach().contiguous().to("cpu").numpy()
-        return Image.fromarray(array)
+    def _paired_video_frames(self, path_a: Path, path_b: Path, max_frames: int) -> Tuple[List[Image.Image], List[Image.Image]]:
+        return self.video_sampler.sample(path_a, path_b, max_frames)
 
     def _ensure_batch_list(self, values: object, length: int) -> List[object | None]:
         if values is None:

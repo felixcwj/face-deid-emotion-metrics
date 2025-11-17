@@ -28,3 +28,4 @@ class PipelineConfig:
     lpips_distance_max: float = 1.0
     max_files: Optional[int] = None
     emoti_model_name: str = DEFAULT_EMOTI_MODEL_NAME
+    video_backend: str = "decord"
