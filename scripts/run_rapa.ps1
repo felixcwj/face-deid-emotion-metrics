@@ -1,4 +1,4 @@
-# WSL2 Ubuntu GPU workflow is recommended for full runs; this Windows script is best for quick samples or debugging.
+# Windows helper script for quick samples; use the CLI directly for full runs or custom arguments.
 
 $baseDir = 'D:\RAPA'
 $outputPath = 'D:\RAPA\rapa_report.xlsx'

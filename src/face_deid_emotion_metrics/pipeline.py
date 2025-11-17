@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 from .config import PipelineConfig
-from .models_emotion import EMOTION_LABELS, EmotionSimilarityEngine
+from .models_emotion import EmotionSimilarityEngine
 from .models_face import FaceObservation, FaceSimilarityEngine
 
 ProgressCallback = Optional[Callable[[str, int], None]]
@@ -22,25 +22,21 @@ ProgressCallback = Optional[Callable[[str, int], None]]
 class PersonAccumulator:
     facenet_values: List[float] = field(default_factory=list)
     style_values: List[float] = field(default_factory=list)
-    fer_original: List[np.ndarray] = field(default_factory=list)
-    fer_output: List[np.ndarray] = field(default_factory=list)
-    deep_original: List[np.ndarray] = field(default_factory=list)
-    deep_output: List[np.ndarray] = field(default_factory=list)
+    emotion_original: List[np.ndarray] = field(default_factory=list)
+    emotion_output: List[np.ndarray] = field(default_factory=list)
 
-    def add(self, observation: FaceObservation, fer_original: np.ndarray, fer_output: np.ndarray, deep_original: np.ndarray, deep_output: np.ndarray) -> None:
+    def add(self, observation: FaceObservation, emotion_original: np.ndarray, emotion_output: np.ndarray) -> None:
         self.facenet_values.append(observation.facenet_percent)
         self.style_values.append(observation.style_percent)
-        self.fer_original.append(fer_original)
-        self.fer_output.append(fer_output)
-        self.deep_original.append(deep_original)
-        self.deep_output.append(deep_output)
+        self.emotion_original.append(emotion_original)
+        self.emotion_output.append(emotion_output)
 
 
 class MetricsPipeline:
     def __init__(self, config: PipelineConfig, face_engine: FaceSimilarityEngine | None = None, emotion_engine: EmotionSimilarityEngine | None = None) -> None:
         self.config = config
         self.face_engine = face_engine or FaceSimilarityEngine(device=config.device, lpips_distance_max=config.lpips_distance_max)
-        self.emotion_engine = emotion_engine or EmotionSimilarityEngine()
+        self.emotion_engine = emotion_engine or EmotionSimilarityEngine(device=config.device, model_name=config.emoti_model_name)
 
     def run(self, progress_callback: ProgressCallback = None) -> pd.DataFrame:
         records: List[Dict[str, float | str]] = []
@@ -58,8 +54,7 @@ class MetricsPipeline:
                 "facenet_percent": metrics["facenet_percent"],
                 "lpips_percent": metrics["lpips_percent"],
                 "final_percent": metrics["final_percent"],
-                "fer_percent": metrics["fer_percent"],
-                "deepface_percent": metrics["deepface_percent"],
+                "emoti_emotion_percent": metrics["emoti_emotion_percent"],
                 "person_count": person_count,
                 "duration_label": duration_label,
             }
@@ -71,8 +66,7 @@ class MetricsPipeline:
             "facenet_percent",
             "lpips_percent",
             "final_percent",
-            "fer_percent",
-            "deepface_percent",
+            "emoti_emotion_percent",
             "person_count",
             "duration_label",
         ]
@@ -107,36 +101,35 @@ class MetricsPipeline:
         if not observations:
             return self._blank_metrics(), 0
         persons: Dict[str, PersonAccumulator] = defaultdict(PersonAccumulator)
-        for observation in observations:
-            fer_original, deep_original = self.emotion_engine.emotion_vectors(observation.original_face)
-            fer_output, deep_output = self.emotion_engine.emotion_vectors(observation.deidentified_face)
-            persons[observation.person_id].add(observation, fer_original, fer_output, deep_original, deep_output)
+        original_faces = [obs.original_face for obs in observations]
+        deidentified_faces = [obs.deidentified_face for obs in observations]
+        combined_faces = original_faces + deidentified_faces
+        combined_vectors = self.emotion_engine.emotion_vectors(combined_faces)
+        split_index = len(original_faces)
+        original_vectors = combined_vectors[:split_index]
+        output_vectors = combined_vectors[split_index:]
+        for observation, original_vector, output_vector in zip(observations, original_vectors, output_vectors):
+            persons[observation.person_id].add(observation, original_vector, output_vector)
         facenet_scores: List[float] = []
         style_scores: List[float] = []
         final_scores: List[float] = []
-        fer_scores: List[float] = []
-        deep_scores: List[float] = []
+        emotion_scores: List[float] = []
         for accumulator in persons.values():
             facenet_mean = self._mean(accumulator.facenet_values)
             style_mean = self._mean(accumulator.style_values)
             final_score = facenet_mean if style_mean >= self.config.style_similarity_threshold else 0.3 * facenet_mean + 0.7 * style_mean
-            fer_original_vector = self._mean_vector(accumulator.fer_original)
-            fer_output_vector = self._mean_vector(accumulator.fer_output)
-            deep_original_vector = self._mean_vector(accumulator.deep_original)
-            deep_output_vector = self._mean_vector(accumulator.deep_output)
-            fer_similarity = self.emotion_engine.similarity_percent(fer_original_vector, fer_output_vector)
-            deep_similarity = self.emotion_engine.similarity_percent(deep_original_vector, deep_output_vector)
+            emotion_original_vector = self._mean_vector(accumulator.emotion_original)
+            emotion_output_vector = self._mean_vector(accumulator.emotion_output)
+            emotion_similarity = self.emotion_engine.similarity_percent(emotion_original_vector, emotion_output_vector)
             facenet_scores.append(facenet_mean)
             style_scores.append(style_mean)
             final_scores.append(final_score)
-            fer_scores.append(fer_similarity)
-            deep_scores.append(deep_similarity)
+            emotion_scores.append(emotion_similarity)
         metrics = {
             "facenet_percent": self._mean(facenet_scores),
             "lpips_percent": self._mean(style_scores),
             "final_percent": self._mean(final_scores),
-            "fer_percent": self._mean(fer_scores),
-            "deepface_percent": self._mean(deep_scores),
+            "emoti_emotion_percent": self._mean(emotion_scores),
         }
         return metrics, len(persons)
 
@@ -147,12 +140,12 @@ class MetricsPipeline:
 
     def _mean_vector(self, vectors: List[np.ndarray]) -> np.ndarray:
         if not vectors:
-            return np.full(len(EMOTION_LABELS), 1.0 / len(EMOTION_LABELS), dtype=np.float32)
+            return self.emotion_engine.uniform_vector()
         stacked = np.stack(vectors, axis=0)
         mean_vector = stacked.mean(axis=0)
         total = float(mean_vector.sum())
         if total == 0:
-            return np.full(len(mean_vector), 1.0 / len(mean_vector), dtype=np.float32)
+            return self.emotion_engine.uniform_vector()
         return mean_vector / total
 
     def _blank_metrics(self) -> Dict[str, float]:
@@ -160,8 +153,7 @@ class MetricsPipeline:
             "facenet_percent": 0.0,
             "lpips_percent": 0.0,
             "final_percent": 0.0,
-            "fer_percent": 0.0,
-            "deepface_percent": 0.0,
+            "emoti_emotion_percent": 0.0,
         }
 
     def _video_duration_label(self, path: Path) -> str:

@@ -14,8 +14,7 @@ class ExcelWriter:
         "FaceNet (%)",
         "LPIPS (%)",
         "Final score (%)",
-        "FER emotion (%)",
-        "DeepFace emotion (%)",
+        "Emoti emotion (%)",
         "Person count",
         "Duration",
     ]
@@ -34,8 +33,7 @@ class ExcelWriter:
                     float(record.get("facenet_percent", 0.0)),
                     float(record.get("lpips_percent", 0.0)),
                     float(record.get("final_percent", 0.0)),
-                    float(record.get("fer_percent", 0.0)),
-                    float(record.get("deepface_percent", 0.0)),
+                    float(record.get("emoti_emotion_percent", 0.0)),
                     int(record.get("person_count", 0)),
                     record.get("duration_label", ""),
                 ]
@@ -72,9 +70,9 @@ class ExcelWriter:
             self._apply_border(sheet.cell(row=row, column=4), left=thick, right=thick)
             self._apply_border(sheet.cell(row=row, column=5), left=thick)
         for row_index in range(2, max_row + 1):
-            for col_index in (2, 3, 4, 5, 6):
+            for col_index in (2, 3, 4, 5):
                 sheet.cell(row=row_index, column=col_index).number_format = "0.0"
-            sheet.cell(row=row_index, column=7).number_format = "0"
+            sheet.cell(row=row_index, column=6).number_format = "0"
         self._set_column_widths(sheet)
 
     def _apply_border(self, cell, left: Side | None = None, right: Side | None = None, top: Side | None = None, bottom: Side | None = None) -> None:
@@ -92,6 +90,5 @@ class ExcelWriter:
         sheet.column_dimensions["C"].width = 12
         sheet.column_dimensions["D"].width = 16
         sheet.column_dimensions["E"].width = 22
-        sheet.column_dimensions["F"].width = 24
+        sheet.column_dimensions["F"].width = 14
         sheet.column_dimensions["G"].width = 14
-        sheet.column_dimensions["H"].width = 14

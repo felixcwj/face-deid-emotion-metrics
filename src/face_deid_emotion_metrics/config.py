@@ -3,11 +3,15 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 import torch
+import torch.backends.cudnn as cudnn
+
+DEFAULT_EMOTI_MODEL_NAME = "enet_b0_8_va_mtl"
 
 
 def require_cuda_device() -> torch.device:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA GPU is required; CPU fallback is disabled")
+    cudnn.benchmark = True
     return torch.device("cuda:0")
 
 
@@ -23,3 +27,4 @@ class PipelineConfig:
     style_similarity_threshold: float = 70.0
     lpips_distance_max: float = 1.0
     max_files: Optional[int] = None
+    emoti_model_name: str = DEFAULT_EMOTI_MODEL_NAME
