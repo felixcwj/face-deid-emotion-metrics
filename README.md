@@ -81,9 +81,11 @@ Decord는 Windows용으로 CPU 빌드만 배포되므로, `scripts/install_decor
 
 ```powershell
 pwsh -File .\scripts\install_decord_gpu.ps1
+# 혹은 사용자 지정 경로를 원할 때
+pwsh -File .\scripts\install_decord_gpu.ps1 -InstallRoot C:\face_deid_decord -CudaToolkit "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6"
 ```
 
-스크립트는 관리자 권한이 필수입니다. 실행 시 FFmpeg 패키지를 내려받아 PATH에 등록하고, Visual Studio Build Tools가 없으면 `winget`(또는 NVIDIA 공식 네트워크 인스톨러)을 사용해 CUDA Toolkit 12.6을 자동 설치한 뒤 FFmpeg/CUDA 경로를 사용해 GPU 지원 decord wheel을 빌드합니다. 마지막으로 샘플 영상을 NVDEC으로 열어 GPU 경로가 정상인지 검증합니다. 이 단계를 통과해야 CLI가 mp4를 문제없이 처리합니다. CUDA 설치 단계는 수 분이 걸릴 수 있습니다.
+스크립트는 관리자 권한이 필수입니다. 실행 시 `C:\face_deid_decord`(기본값, `-InstallRoot`로 변경 가능)에 필요한 파일을 내려받고, Visual Studio Build Tools가 없으면 `winget`(또는 NVIDIA 공식 네트워크 인스톨러)을 사용해 CUDA Toolkit 12.6을 설치한 뒤 GPU 지원 decord wheel을 빌드합니다. 마지막으로 샘플 영상을 NVDEC으로 열어 GPU 경로가 정상인지 검증합니다. CUDA 설치 단계는 수 분이 걸릴 수 있습니다.
 
 ## Usage
 

@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$InstallRoot = "$env:LOCALAPPDATA\face_deid_decord",
+    [string]$InstallRoot = "$($env:SystemDrive)\face_deid_decord",
     [string]$CudaToolkit = $env:CUDA_PATH,
     [string]$PythonExe
 )
