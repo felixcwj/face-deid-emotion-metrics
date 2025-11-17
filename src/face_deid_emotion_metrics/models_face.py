@@ -4,13 +4,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
-import cv2
 import lpips
 import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image
+from decord import VideoReader as DecordVideoReader
+from decord import cpu as decord_cpu
+from decord import gpu as decord_gpu
 from facenet_pytorch import InceptionResnetV1, MTCNN
+from torch.utils import dlpack as torch_dlpack
 from torchvision import transforms
 
 
@@ -268,22 +271,14 @@ class FaceSimilarityEngine:
         return tensor * 2.0 - 1.0
 
     def _paired_video_frames(self, path_a: Path, path_b: Path, max_frames: int) -> Tuple[List[Image.Image], List[Image.Image]]:
-        cap_a = cv2.VideoCapture(str(path_a))
-        cap_b = cv2.VideoCapture(str(path_b))
-        frames_a: List[Image.Image] = []
-        frames_b: List[Image.Image] = []
-        try:
-            total_a = int(cap_a.get(cv2.CAP_PROP_FRAME_COUNT))
-            total_b = int(cap_b.get(cv2.CAP_PROP_FRAME_COUNT))
-            total = min(total_a, total_b)
-            if total <= 0:
-                return frames_a, frames_b
-            indices = self._frame_indices(total, max_frames)
-            frames_a = self._sample_frames(cap_a, indices)
-            frames_b = self._sample_frames(cap_b, indices)
-        finally:
-            cap_a.release()
-            cap_b.release()
+        reader_a = self._video_reader(path_a)
+        reader_b = self._video_reader(path_b)
+        total = min(len(reader_a), len(reader_b))
+        if total <= 0:
+            return [], []
+        indices = self._frame_indices(total, max_frames)
+        frames_a = self._fetch_frames(reader_a, indices)
+        frames_b = self._fetch_frames(reader_b, indices)
         paired = min(len(frames_a), len(frames_b))
         if paired <= 0:
             return [], []
@@ -295,29 +290,28 @@ class FaceSimilarityEngine:
         positions = np.linspace(0, total - 1, num=max_frames, dtype=np.int32)
         return sorted(set(int(value) for value in positions))
 
-    def _sample_frames(self, capture: cv2.VideoCapture, indices: Sequence[int]) -> List[Image.Image]:
-        frames: List[Image.Image] = []
+    def _video_reader_context(self):
+        if self.device.type == "cuda":
+            index = self.device.index if self.device.index is not None else 0
+            return decord_gpu(index)
+        return decord_cpu(0)
+
+    def _video_reader(self, path: Path) -> DecordVideoReader:
+        return DecordVideoReader(str(path), ctx=self._video_reader_context())
+
+    def _fetch_frames(self, reader: DecordVideoReader, indices: Sequence[int]) -> List[Image.Image]:
         if not indices:
-            return frames
-        iterator = iter(indices)
-        try:
-            target = next(iterator)
-        except StopIteration:
-            return frames
-        current = 0
-        while True:
-            success, frame = capture.read()
-            if not success or frame is None:
-                break
-            if current == target:
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frames.append(Image.fromarray(rgb))
-                try:
-                    target = next(iterator)
-                except StopIteration:
-                    break
-            current += 1
+            return []
+        batch = reader.get_batch(list(indices))
+        torch_batch = torch_dlpack.from_dlpack(batch.to_dlpack())
+        frames: List[Image.Image] = []
+        for frame_tensor in torch_batch:
+            frames.append(self._tensor_to_image(frame_tensor))
         return frames
+
+    def _tensor_to_image(self, frame_tensor: torch.Tensor) -> Image.Image:
+        array = frame_tensor.detach().contiguous().to("cpu").numpy()
+        return Image.fromarray(array)
 
     def _ensure_batch_list(self, values: object, length: int) -> List[object | None]:
         if values is None:
