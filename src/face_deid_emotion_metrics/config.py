@@ -54,7 +54,7 @@ class PipelineConfig:
     output_dir: Path
     output_path: Path
     device: torch.device
-    file_extensions: Tuple[str, ...] = (".jpg", ".jpeg", ".mp4")
+    file_extensions: Tuple[str, ...] = (".jpg", ".jpeg", ".png", ".mp4", ".mov", ".mkv")
     max_frames_per_video: int = 32
     style_similarity_threshold: float = 70.0
     lpips_distance_max: float = 1.0

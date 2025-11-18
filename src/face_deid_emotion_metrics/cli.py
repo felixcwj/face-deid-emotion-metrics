@@ -4,14 +4,14 @@ import argparse
 import logging
 import random
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 from openpyxl import Workbook
 from tqdm import tqdm
 
 from .config import PipelineConfig, require_cuda_device
 from .pipeline import MetricsPipeline
-from .sample_workbook import SampleWorkbook, SheetSpec
+from .sample_workbook import ColumnDefinition, SampleWorkbook, SheetSpec
 
 
 def parse_args() -> argparse.Namespace:
@@ -54,34 +54,91 @@ def _write_debug_sample(records, output_path: Path) -> None:
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "debug_sample"
-    headers = ["filename", "media_type", "facenet_percent", "lpips_percent", "final_score_percent"]
+    headers = ["Filename", "Media Type", "Facenet", "LPIPS", "Final Score", "Emoti", "Person Count", "Duration", "Error"]
     sheet.append(headers)
     for record in records:
         sheet.append(
             [
                 record.get("filename", ""),
                 record.get("media_type", ""),
-                "" if record.get("facenet_percent") is None else float(record["facenet_percent"]),
-                "" if record.get("lpips_percent") is None else float(record["lpips_percent"]),
-                "" if record.get("final_score_percent") is None else float(record["final_score_percent"]),
+                _safe_float(record.get("facenet_percent")),
+                _safe_float(record.get("lpips_percent")),
+                _safe_float(record.get("final_score_percent")),
+                _safe_float(record.get("emoti_emotion_percent")),
+                _safe_int(record.get("person_count")),
+                record.get("duration_label", ""),
+                record.get("error", ""),
             ]
         )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(output_path)
 
 
+def _safe_float(value: object):
+    if value in (None, ""):
+        return ""
+    try:
+        return float(value)
+    except Exception:
+        return value
+
+
+def _safe_int(value: object):
+    if value in (None, ""):
+        return ""
+    try:
+        return int(value)
+    except Exception:
+        return value
+
+
 def _print_debug_sample(records) -> None:
     print("Random debug sample (filename | media | FaceNet | LPIPS | Final score)")
+
     def fmt(value):
         if value is None:
             return "NA"
         return f"{value:5.1f}"
+
     for record in records:
         facenet = record.get("facenet_percent")
         lpips = record.get("lpips_percent")
         final_score = record.get("final_score_percent")
         line = f"{record.get('filename',''):<20} | {record.get('media_type',''):>5} | {fmt(facenet)} | {fmt(lpips)} | {fmt(final_score)}"
         print(line)
+
+
+TABLE_HEADERS = ["Filename", "Media Type", "Facenet", "LPIPS", "Final Score", "Emoti", "Person Count", "Duration"]
+DECIMAL_HEADERS = ["Facenet", "LPIPS", "Final Score", "Emoti"]
+INTEGER_HEADERS = [
+    "Person Count",
+    "Load (ms)",
+    "Resize (ms)",
+    "Facenet (ms)",
+    "LPIPS (ms)",
+    "Emoti (ms)",
+    "Other (ms)",
+    "Total (ms)",
+]
+THICK_BOUNDARIES = [("LPIPS", "Final Score"), ("Final Score", "Emoti")]
+COLUMN_DEFINITIONS: Sequence[ColumnDefinition] = [
+    ColumnDefinition("Filename", "filename"),
+    ColumnDefinition("Media Type", "media_type"),
+    ColumnDefinition("Facenet", "facenet_percent"),
+    ColumnDefinition("LPIPS", "lpips_percent"),
+    ColumnDefinition("Final Score", "final_score_percent"),
+    ColumnDefinition("Emoti", "emoti_emotion_percent"),
+    ColumnDefinition("Person Count", "person_count"),
+    ColumnDefinition("Duration", "duration_label"),
+    ColumnDefinition("Error", "error"),
+    ColumnDefinition("Load (ms)", "load_ms"),
+    ColumnDefinition("Resize (ms)", "resize_ms"),
+    ColumnDefinition("Facenet (ms)", "facenet_ms"),
+    ColumnDefinition("LPIPS (ms)", "lpips_ms"),
+    ColumnDefinition("Emoti (ms)", "emoti_ms"),
+    ColumnDefinition("Other (ms)", "other_ms"),
+    ColumnDefinition("Total (ms)", "total_ms"),
+]
 
 
 def _default_output_path(base_dir: Path, override: str | None) -> Path:
@@ -187,25 +244,7 @@ def _run_sample_workbook(pipeline: MetricsPipeline, base_dir: Path, output_path:
     if not pairs:
         raise RuntimeError("No matched input/output pairs were found under the base directory")
     specs = _select_sample_specs(pairs, seed)
-    headers = [
-        "filename",
-        "media_type",
-        "facenet_percent",
-        "lpips_percent",
-        "final_score_percent",
-        "emoti_emotion_percent",
-        "person_count",
-        "duration_label",
-        "load_ms",
-        "resize_ms",
-        "facenet_ms",
-        "lpips_ms",
-        "emoti_ms",
-        "other_ms",
-        "total_ms",
-        "error",
-    ]
-    workbook = SampleWorkbook(output_path, specs, headers)
+    workbook = SampleWorkbook(output_path, specs, COLUMN_DEFINITIONS)
     pending = _collect_pending_paths(specs, workbook)
     records: Dict[str, Dict[str, object]] = {}
     if pending:
@@ -227,7 +266,13 @@ def _run_sample_workbook(pipeline: MetricsPipeline, base_dir: Path, output_path:
                 logging.warning("No metrics captured for %s", relative)
                 continue
             workbook.append_record(spec.name, record)
-    workbook.save()
+    workbook.finalize(
+        table_headers=TABLE_HEADERS,
+        final_score_header="Final Score",
+        decimal_headers=DECIMAL_HEADERS,
+        integer_headers=INTEGER_HEADERS,
+        thick_boundaries=THICK_BOUNDARIES,
+    )
     _write_rationale(base_dir)
     logging.info("Wrote sample workbook to %s", output_path)
 
@@ -277,3 +322,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+

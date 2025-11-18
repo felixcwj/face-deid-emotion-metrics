@@ -150,3 +150,26 @@ function rapa {
 }
 ```
 - Typical usage: `rapa` (defaults to `D:\RAPA`), or `rapa -BaseDir "D:\RAPA" -Output "D:\RAPA\custom.xlsx" --video-backend ffmpeg`. The helper always produces the three-sheet workbook plus `<BaseDir>\근거.txt`.
+
+[2025-11-18] Excel layout + robustness refresh
+- The RAPA workbook now has a fixed AH table on every sheet:
+  - Columns A–H are `Filename`, `Media Type`, `Facenet`, `LPIPS`, `Final Score`, `Emoti`, `Person Count`, `Duration`.
+  - Columns I+ hold diagnostics (`Error`, `Load (ms)`, `Resize (ms)`, `Facenet (ms)`, `LPIPS (ms)`, `Emoti (ms)`, `Other (ms)`, `Total (ms)`).
+  - All A–H cells (headers + data) are center-aligned; Facenet/LPIPS/Final/Emoti display with one decimal; Person Count is integer; Duration shows seconds as `"XXs"` (images stay blank).
+  - Column widths auto-fit per sheet so long RAPA filenames are readable without manual resizing.
+  - The Final Score column is bold (header + values) and highlighted with thick vertical borders on both sides. The header row has a thick bottom border, the table perimeter (A–H) uses a thick frame, and the interiors between LPIPS|Final and Final|Emoti also get thick separators per row.
+- Pipeline resiliency:
+  - Emotion batching no longer triggers the boolean-mask mismatch; rows with invalid probabilities fall back to uniform vectors.
+  - Every per-file execution now records stage timings (`load_ms`, `resize_ms`, etc.) and wraps processing in a try/except so bad files still yield a row with the `Error` column populated instead of crashing the run.
+  - `_process_single_pair` surfaces stage progress in the logs (e.g., “Processing foo.mp4: processing frames 21/32”), matching what you see in your PowerShell session.
+  - All float conversions guard against `None` (e.g., debug sample generation), so there are no `float(NoneType)` crashes.
+- Media coverage:
+  - `PipelineConfig.file_extensions` now includes `.png`, and the sorted sample lists (`sample_40/100/500`) consider both stills and videos. Media Type now clearly shows `"image"` or `"video"` in every sheet, and Person Count/Duration respect those semantics (images leave Duration blank; videos show seconds only).
+  - Video decoding defaults to `--video-backend auto`, which tries the CUDA Decord backend first and transparently falls back to ffmpeg if GPU decode isn’t available. The bundled `rapa` helper forces `--video-backend ffmpeg` on Windows for maximum compatibility; WSL runs can simply rely on auto.
+
+[2025-11-19] Final score + 근거 rationale polish
+- Final score is now a single metric everywhere (`FINAL_SCORE_FACENET_WEIGHT=0.2`, `FINAL_SCORE_LPIPS_WEIGHT=0.8`, quadratic scaling + clamp). No alternate “style” score exists; every sheet/report prints one “Final Score (%)” column that already reflects the LPIPS-heavy weighting.
+- Workbook presentation is locked to columns A–H = Filename, Media Type, Facenet, LPIPS, Final Score, Emoti, Person Count, Duration (centered headers/data, one-decimal formatting for metrics, integer Person Count, duration strings like `12s`). Column E (Final Score) is bold and boxed in by thick borders, headers have a thick separator, LPIPS|Final and Final|Emoti boundaries are thick, and A–H are wrapped by a thick outer frame. Widths auto-fit per sheet so long Korean filenames render without manual resizing.
+- `<BaseDir>\근거.txt` is rewritten on every run with the LPIPS > FaceNet justification: Schroff et al. 2015 (FaceNet identity embeddings), Zhang et al. 2018 (LPIPS correlates with human perceptual judgements), Hukkelas et al. 2019 (DeepPrivacy prioritizes perceptual plausibility), and Karras et al. 2019 (StyleGAN’s perceptual metrics). Each reference gets 1–2 sentences explaining why the 20/80 weighting matches RAPA’s filter-heavy workflow.
+- Pipeline resiliency highlights: emotion batching now normalizes any malformed probability tensors before division (no more boolean-mask mismatches), `_clip_box` skips invalid/NaN bounding boxes instead of calling `float(None)`, and `_process_single_pair` logs stage progress (loading, emotion inference, aggregating) while capturing profiler timings so failures still emit a row with the `Error` field populated.
+- `rapa` (PowerShell helper in scripts/run_rapa.ps1 or pasted into your PS7 profile) still defaults to `D:\RAPA`, forces `--video-backend ffmpeg`, resumes partial workbooks, and now guarantees that image + video extensions are both enumerated (`.jpg/.jpeg/.png/.mp4/.mov/.mkv`). Typical one-liner: `rapa` or `rapa -BaseDir 'D:\RAPA' -Output 'D:\RAPA\rapa_report_samples.xlsx' --resize-512`.

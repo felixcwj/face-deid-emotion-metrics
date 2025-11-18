@@ -247,8 +247,11 @@ class MetricsPipeline:
                 logging.info("Processing %s: %s (%.1f%%)", relative_path, message, percent)
         file_progress = _FileProgress(log_callback, relative_path)
         try:
+            file_progress.update(5.0, "loading files")
             observations = self._analyze_file(input_file, output_file, file_progress, profiler)
+            file_progress.update(75.0, "emotion inference")
             metrics, person_count = self._aggregate_observations(observations, profiler=profiler)
+            file_progress.update(90.0, "aggregating metrics")
             record["facenet_percent"] = metrics.get("facenet_percent")
             record["lpips_percent"] = metrics.get("lpips_percent")
             record["final_score_percent"] = metrics.get("final_score_percent")
@@ -396,8 +399,5 @@ class MetricsPipeline:
             cap.release()
         if fps <= 0 or frame_count <= 0:
             return ""
-        seconds = int(round(frame_count / fps))
-        minutes, secs = divmod(seconds, 60)
-        if minutes:
-            return f"{minutes}m {secs}s"
-        return f"{secs}s"
+        seconds = int(max(0, round(frame_count / fps)))
+        return f"{seconds}s"

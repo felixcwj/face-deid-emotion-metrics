@@ -352,13 +352,19 @@ class FaceSimilarityEngine:
         if isinstance(box, torch.Tensor):
             values = box.detach().cpu().flatten().numpy()
         else:
-            values = np.array(box, dtype=np.float32).flatten()
+            try:
+                values = np.asarray(box, dtype=np.float32).flatten()
+            except (TypeError, ValueError):
+                return None
         if values.size < 4:
             return None
-        x1 = int(max(0.0, float(values[0])))
-        y1 = int(max(0.0, float(values[1])))
-        x2 = int(max(0.0, float(values[2])))
-        y2 = int(max(0.0, float(values[3])))
+        coords = values[:4]
+        if not np.all(np.isfinite(coords)):
+            return None
+        x1 = int(max(0.0, float(coords[0])))
+        y1 = int(max(0.0, float(coords[1])))
+        x2 = int(max(0.0, float(coords[2])))
+        y2 = int(max(0.0, float(coords[3])))
         x1 = min(x1, width)
         y1 = min(y1, height)
         x2 = min(max(x2, x1 + 1), width)
