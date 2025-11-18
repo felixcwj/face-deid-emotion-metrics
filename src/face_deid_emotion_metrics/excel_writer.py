@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Iterable, List, Mapping, Sequence
 
@@ -26,15 +27,27 @@ class ExcelWriter:
         sheet = workbook.active
         sheet.title = "metrics"
         sheet.append(self.headers)
+        def clean(value):
+            if value is None:
+                return ""
+            if isinstance(value, float) and math.isnan(value):
+                return ""
+            return value
+
         for record in records:
+            facenet_value = clean(record.get("facenet_percent"))
+            lpips_value = clean(record.get("lpips_percent"))
+            final_value = clean(record.get("final_score_percent"))
+            emoti_value = clean(record.get("emoti_emotion_percent"))
+            person_count_value = clean(record.get("person_count"))
             sheet.append(
                 [
                     record.get("filename", ""),
-                    float(record.get("facenet_percent", 0.0)),
-                    float(record.get("lpips_percent", 0.0)),
-                    float(record.get("final_percent", 0.0)),
-                    float(record.get("emoti_emotion_percent", 0.0)),
-                    int(record.get("person_count", 0)),
+                    "" if facenet_value == "" else float(facenet_value),
+                    "" if lpips_value == "" else float(lpips_value),
+                    "" if final_value == "" else float(final_value),
+                    "" if emoti_value == "" else float(emoti_value),
+                    "" if person_count_value == "" else int(person_count_value),
                     record.get("duration_label", ""),
                 ]
             )

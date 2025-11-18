@@ -1,0 +1,152 @@
+Project: face-deid-emotion-metrics — compute identity, style, and emotion similarity for mirrored `input/` vs `output/` datasets.
+Repo: C:\projects\face-deid-emotion-metrics
+Dataset: Base directory D:\RAPA (mirrored `input/` and `output/`, `.jpg` stills and `.mp4` videos share the same relative paths).
+
+Pipeline summary:
+- Every `.jpg` and `.mp4` under `input/` must have a twin under `output/` with the same relative path; each pair becomes its own Excel row.
+- Metrics per row (in order): filename, FaceNet (%), LPIPS (%), Final score (%), Emoti emotion (%), Person count, Duration. (Emoti replaces the legacy FER/DeepFace columns and uses EmotiEffLib’s PyTorch backend.)
+- FaceNet/LPIPS/Final/MTCNN detection/Emoti all run on the CUDA device (`cuda:0`). Person count = number of distinct tracked faces in that file; Duration is populated for `.mp4` rows (e.g., `47s`, `2m 05s`).
+- Excel formatting: centered cells, one-decimal metrics, bold Final score column, thick borders around header/table and LPIPS|Final|Emoti separators.
+
+Code structure:
+- src/face_deid_emotion_metrics/: cli.py, pipeline.py, models_face.py, models_emotion.py, excel_writer.py, config.py.
+- scripts/run_rapa.ps1 — Windows helper for quick samples/debugging.
+- scripts/deid.ps1 — interactive PowerShell launcher (`deid`).
+- scripts/install_deid_alias.ps1 — one-time profile updater so every new PowerShell session knows about `deid`.
+- `--max-files N` is a debug-only limiter; omit it for full counts.
+
+Environment setup (Windows PowerShell, GPU required):
+```powershell
+Set-Location C:\projects\face-deid-emotion-metrics
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt  # pulls emotiefflib + timm<0.10 for compatibility
+pip install -e .
+```
+
+Interactive PowerShell helper (`deid`):
+```powershell
+Set-Location C:\projects\face-deid-emotion-metrics
+pwsh -File .\scripts\install_deid_alias.ps1  # run once to register the function
+```
+Open a new PowerShell window (or reload your profile) and use:
+```powershell
+deid
+```
+The script asks for the dataset folder (e.g., `D:\RAPA`), an output Excel path (default `<base>\rapa_report_interactive.xlsx`), and a final confirmation (`Y`). Typing `Y` launches the CLI; anything else cancels.
+
+Direct CLI usage (same behavior as `deid` but without prompts):
+```powershell
+python -m face_deid_emotion_metrics.cli --base-dir D:\RAPA --output D:\RAPA\rapa_report.xlsx
+```
+
+GPU checks (optional, from the venv):
+```powershell
+python - <<'PY'
+import torch
+print(torch.__version__)
+print('CUDA available:', torch.cuda.is_available())
+if torch.cuda.is_available():
+    print('Device 0:', torch.cuda.get_device_name(0))
+PY
+```
+
+Notes:
+- MTCNN face detection now runs on the same CUDA device as FaceNet/LPIPS/emotions, so a missing GPU immediately aborts via `require_cuda_device()`.
+- EmotiEffLib relies on EfficientNet weights from timm 0.9.x. Keep the `timm>=0.9,<0.10` constraint (already in requirements.txt) to avoid the `conv_s2d` attribute error seen in timm 1.x.
+- Large runs still benefit from fast disks/CPUs because video decoding and data loading happen on the host, but all neural nets remain on GPU.
+
+[2025-11-17] Optimized emotion batching in pipeline (single EmotiEffLib call for original+output faces) and enabled torch.backends.cudnn.benchmark for faster CUDA kernels; metrics remain unchanged.
+[2025-11-17] Accelerated video path: sequential frame sampling (no random seeks) + batched MTCNN detection per chunk; GPU work unchanged but throughput improved.
+[2025-11-17] Decord now requires CUDA build; pipeline aborts if GPU decode missing (build from source per README).
+[2025-11-17] Added scripts/install_decord_gpu.ps1 to auto-build CUDA decord (installs Build Tools/FFmpeg, verifies NVDEC).
+[2025-11-17] install_decord_gpu.ps1 now enforces admin rights, installs CUDA Toolkit 12.6 via winget or NVIDIA's network installer, then builds GPU-only decord.
+[2025-11-17] CUDA installer now defaults to C:\face_deid_decord (override with -InstallRoot) to avoid non-ASCII paths; specify -CudaToolkit for existing installs.
+[2025-11-17] CMake 계속 'No CUDA toolset found' → 원인: CUDA 12.6 설치 시 Visual Studio Integration 빠짐. 해결: CUDA 12.6 삭제 후 Custom 설치에서 VS Integration 포함, 환경변수 수동 지정, 아래 명령으로 빌드:
+  - 관리자 PowerShell 예시:
+    ```
+    $env:CUDA_PATH = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6"
+    $env:CUDA_PATH_V12_6 = $env:CUDA_PATH
+    $env:CUDACXX = Join-Path $env:CUDA_PATH "bin\nvcc.exe"
+    $env:PATH = "$env:CUDA_PATH\bin;$env:PATH"
+    & "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat" -arch=x64
+    cmake -S C:\face_deid_decord\decord -B C:\face_deid_decord\decord\build `
+          -G "Visual Studio 17 2022" -A x64 `
+          -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=Release `
+          "-DFFMPEG_DIR=C:\face_deid_decord\ffmpeg\ffmpeg-master-latest-win64-lgpl" `
+          "-DCUDAToolkit_ROOT=$env:CUDA_PATH" `
+          "-DCMAKE_CUDA_COMPILER=$env:CUDACXX"
+    cmake --build C:\face_deid_decord\decord\build --config Release
+    ```
+  - 수동 설치가 귀찮으면 새 챗 세션에서 위 과정을 묻도록 프롬프트(복사용) 준비해 두었음.
+[2025-11-17] WSL 자동화/ffmpeg GPU 파이프라인 + 진행률 개선
+- WSL2에서 ffmpeg CUDA hwaccel을 기본 비디오 백엔드로 사용하게 구성 (scripts/wsl/*, scripts/run_rapa_wsl.ps1). Windows에서는 `rapa` 명령 한 줄로 전체 보고서 생성 가능.
+- `video_reader.py`에 ffmpeg/Decord 백엔드 추상화 추가, CLI `--video-backend` 옵션 유지. Decord는 선택 사항으로 전환.
+- Face pipeline(`models_face.py`, `pipeline.py`)이 세분화된 진행률 이벤트를 발생시키고 CLI에서 전체/파일별 tqdm 바를 표시해 0.01% 단위 전체 진행률과 파일별 단계별 상태(로딩→디코드→프레임 처리→감정/집계)를 동시에 확인 가능.
+- `docs/wsl.md`와 README에 새로운 실행 방식과 GPU 디코딩 방법 문서화. `.venv_wsl`은 git에서 제외.
+- 검증: `rapa -MaxFiles 2` 및 `rapa -MaxFiles 1` 로 GPU 디코딩 + 전체 파이프라인 동작 확인, 산출물 `D:\RAPA\rapa_report_full_wsl.xlsx`.
+
+WSL 실행 요약:
+1) `wsl.exe -- bash -lc "./scripts/wsl/setup_env.sh"`
+2) PowerShell 7 관리자 창에서 `rapa` (또는 `pwsh -File .\scripts\run_rapa_wsl.ps1 -BaseDir D:\RAPA -Output D:\RAPA\rapa_report_full_wsl.xlsx`).
+3) 필요 시 `wsl.exe -- bash -lc "source /mnt/c/projects/face-deid-emotion-metrics/.venv_wsl/bin/activate && python scripts/wsl/verify_gpu_decode.py --video /mnt/d/RAPA/input/<sample>.mp4 --backend ffmpeg"` 로 NVDEC 확인.
+[2025-11-18] Profiling mode + Final score refresh
+
+### CLI additions
+- `--profile-only`: runs the full GPU pipeline on 10 deterministically sampled input/output pairs without touching Excel. Same device/model loading as the report run so timings are representative.
+- `--seed`: overrides the profiling sampler seed (default 42) so you can re-run a specific 10-file set.
+- `--resize-512`: forces every decoded frame/image to 512x512 before detection/inference. Useful for profiling resize cost; leave unset for original resolution.
+
+### Profiling workflow
+- Windows: `python -m face_deid_emotion_metrics.cli --base-dir D:\RAPA --profile-only`
+- WSL: `python -m face_deid_emotion_metrics.cli --base-dir /mnt/d/RAPA --profile-only`
+- Output includes `load/resize/facenet/lpips/emoti/other/total` lines in milliseconds + percent of the total runtime. Excel writes are skipped so you can collect numbers quickly.
+
+### PowerShell helper (`rapa`)
+```powershell
+function rapa {
+    param(
+        [string]$BaseDir = "D:\RAPA",
+        [string]$Output = ""
+    )
+    Set-Location "C:\projects\face-deid-emotion-metrics"
+    $python = "C:\projects\face-deid-emotion-metrics\.venv\Scripts\python.exe"
+    if (-not $Output) {
+        $Output = Join-Path $BaseDir "rapa_report_samples.xlsx"
+    }
+    & $python -m face_deid_emotion_metrics.cli --base-dir $BaseDir --output $Output @Args
+}
+```
+Paste into your PowerShell 7 profile to run the full Excel pipeline with `rapa`; pass extra switches (e.g., `--resize-512`) via additional arguments.
+
+### Final score weighting
+- `src/face_deid_emotion_metrics/config.py` exposes `FINAL_SCORE_FACENET_WEIGHT`, `FINAL_SCORE_LPIPS_WEIGHT`, `FINAL_SCORE_SCALE`, `FINAL_SCORE_BIAS`. They are currently fixed at FaceNet 0.2, LPIPS 0.8, scale 0.6154, bias 0.6154.
+- Formula: normalize FaceNet/LPIPS to 0-1, compute `w = (FACENET_WEIGHT * f + LPIPS_WEIGHT * l) / (FACENET_WEIGHT + LPIPS_WEIGHT)`, then `final_score = 100 * FINAL_SCORE_SCALE * (w ** 2) + FINAL_SCORE_BIAS`, clamped to [0.1, 99.9]. Both profiling and report modes use the same calculation so any tweaks immediately affect every row.
+[2025-11-18] Media-specific profiling + debug sampling
+- New CLI flag `--profile-kind {all|image|video}` lets profiling runs target only stills, only videos, or the combined pool. Use `--video-backend ffmpeg` on Windows boxes without GPU decoders.
+- `--debug-random-10` generates 5 random image pairs + 5 random video pairs (seeded via `--seed`) and writes filename/media type/FaceNet/LPIPS/Final score to `random_debug_10.xlsx`.
+- Metric outputs are clamped to [0.1, 99.9] and rows with no detected faces remain blank instead of reporting 0/0/0.
+
+[2025-11-18] Sample workbook + 근거.txt + rapa helper refresh
+- Default report runs now build `rapa_report_samples.xlsx` with three sheets:
+  - `sample_40`: first 20 + last 20 sorted paths (deduplicated if the set is smaller than 40).
+  - `sample_100`: 100 random paths chosen with the CLI `--seed`.
+  - `sample_500`: 500 random paths (or every file if the dataset is smaller).
+  Each row writes filename, media type, FaceNet (%), LPIPS (%), Final score (%), Emoti emotion (%), Person count, Duration, and per-stage timings (`load_ms`, `resize_ms`, `facenet_ms`, `lpips_ms`, `emoti_ms`, `other_ms`, `total_ms`) plus an `error` column. Stage data is captured via the same profiler used for benchmarking, so the workbook doubles as a lightweight log.
+- Runs are resumable: if the workbook already contains rows for a sheet, those filenames are skipped. Appends happen one row at a time and the workbook is saved immediately, so killing `rapa` midway and rerunning simply fills in the missing paths.
+- Every run rewrites `<BaseDir>\근거.txt` explaining the Final score weighting and citing FaceNet (Schroff et al., 2015), LPIPS (Zhang et al., 2018), DeepPrivacy (Hukkelås et al., 2019), and StyleGAN (Karras et al., 2019). The text states why LPIPS receives 80% of the weight while FaceNet keeps 20% to track residual identity.
+- PowerShell helper (drop in your PS7 profile) now defaults to `rapa_report_samples.xlsx` and accepts overrides:
+```powershell
+function rapa {
+    param(
+        [string]$BaseDir = "D:\RAPA",
+        [string]$Output = ""
+    )
+    if (-not $Output) { $Output = Join-Path $BaseDir "rapa_report_samples.xlsx" }
+    Set-Location "C:\projects\face-deid-emotion-metrics"
+    $python = "C:\projects\face-deid-emotion-metrics\.venv\Scripts\python.exe"
+    & $python -m face_deid_emotion_metrics.cli --base-dir $BaseDir --output $Output @Args
+}
+```
+- Typical usage: `rapa` (defaults to `D:\RAPA`), or `rapa -BaseDir "D:\RAPA" -Output "D:\RAPA\custom.xlsx" --video-backend ffmpeg`. The helper always produces the three-sheet workbook plus `<BaseDir>\근거.txt`.

@@ -1,10 +1,12 @@
-# Windows helper script for quick samples; use the CLI directly for full runs or custom arguments.
-
-$baseDir = 'D:\RAPA'
-$outputPath = 'D:\RAPA\rapa_report.xlsx'
-$pythonExe = 'python'
-if (-not (Test-Path $baseDir)) {
-    Write-Error "Base directory not found: $baseDir"
-    exit 1
+param(
+    [string]$BaseDir = 'D:\RAPA',
+    [string]$Output = '',
+    [string[]]$Args
+)
+if (-not $Output) {
+    $Output = Join-Path $BaseDir 'rapa_report_samples.xlsx'
 }
-& $pythonExe -m face_deid_emotion_metrics.cli --base-dir $baseDir --output $outputPath
+$projectRoot = 'C:\projects\face-deid-emotion-metrics'
+$pythonExe = Join-Path $projectRoot '.venv\Scripts\python.exe'
+Set-Location $projectRoot
+& $pythonExe -m face_deid_emotion_metrics.cli --base-dir $BaseDir --output $Output @Args

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
+import time
+
 import lpips
 import numpy as np
 import torch
@@ -12,6 +14,7 @@ from PIL import Image
 from facenet_pytorch import InceptionResnetV1, MTCNN
 from torchvision import transforms
 
+from .profiling import StageProfiler
 from .video_reader import VideoPairSampler, VideoSamplerConfig
 
 @dataclass
@@ -67,9 +70,20 @@ class FaceTrackManager:
 
 
 class FaceSimilarityEngine:
-    def __init__(self, device: torch.device, lpips_distance_max: float = 1.0, track_threshold: float = 0.5, video_batch_size: int = 4, video_backend: str = "decord") -> None:
+    def __init__(
+        self,
+        device: torch.device,
+        lpips_distance_max: float = 1.0,
+        track_threshold: float = 0.5,
+        video_batch_size: int = 4,
+        video_backend: str = "decord",
+        resize_to: Tuple[int, int] | None = None,
+        mtcnn_thresholds: Tuple[float, float, float] = (0.4, 0.5, 0.5),
+        mtcnn_min_face_size: int = 20,
+        rotation_angles: Tuple[int | float, ...] = (0, -30, 30, -60, 60),
+    ) -> None:
         self.device = device
-        self.detector = MTCNN(keep_all=True, device=self.device)
+        self.detector = MTCNN(keep_all=True, device=self.device, thresholds=mtcnn_thresholds, min_face_size=mtcnn_min_face_size)
         self.embedder = InceptionResnetV1(pretrained="vggface2").eval().to(self.device)
         self.lpips_model = lpips.LPIPS(net="vgg").to(self.device)
         self.lpips_distance_max = lpips_distance_max
@@ -80,14 +94,23 @@ class FaceSimilarityEngine:
             transforms.Resize((256, 256)),
             transforms.ToTensor(),
         ])
+        self.resize_to = resize_to
+        self.rotation_angles = tuple(rotation_angles) if rotation_angles else (0,)
 
-    def analyze_image_pair(self, original_path: Path, deidentified_path: Path, progress_fn=None) -> List[FaceObservation]:
+    def analyze_image_pair(self, original_path: Path, deidentified_path: Path, progress_fn=None, profiler: StageProfiler | None = None) -> List[FaceObservation]:
+        load_start = time.perf_counter()
         original_image = self._load_image(original_path)
         deidentified_image = self._load_image(deidentified_path)
+        if profiler:
+            profiler.add("load", time.perf_counter() - load_start)
+        original_image = self._maybe_resize_image(original_image, profiler)
+        deidentified_image = self._maybe_resize_image(deidentified_image, profiler)
         if progress_fn:
             progress_fn(0.1, "detecting faces")
-        descriptors_a = self._detect_faces(original_image)
-        descriptors_b = self._detect_faces(deidentified_image)
+        facenet_start = time.perf_counter()
+        lpips_duration = 0.0
+        descriptors_a = self._detect_faces_with_rotation(original_image)
+        descriptors_b = self._detect_faces_with_rotation(deidentified_image)
         pairs = self._match_pairs(descriptors_a, descriptors_b)
         if progress_fn:
             progress_fn(0.6, "matching faces")
@@ -96,7 +119,9 @@ class FaceSimilarityEngine:
             descriptor_a = descriptors_a[i]
             descriptor_b = descriptors_b[j]
             facenet_percent = self._cosine_percent(similarity)
+            style_start = time.perf_counter()
             style_percent = self._style_percent(descriptor_a.image, descriptor_b.image)
+            lpips_duration += time.perf_counter() - style_start
             observations.append(
                 FaceObservation(
                     person_id=f"person_{index}",
@@ -106,16 +131,27 @@ class FaceSimilarityEngine:
                     style_percent=style_percent,
                 )
             )
+        facenet_duration = time.perf_counter() - facenet_start - lpips_duration
+        if profiler:
+            profiler.add("lpips", lpips_duration)
+            profiler.add("facenet", max(0.0, facenet_duration))
         if progress_fn:
             progress_fn(1.0, "faces analyzed")
         return observations
 
-    def analyze_video_pair(self, original_path: Path, deidentified_path: Path, max_frames: int, progress_fn=None) -> List[FaceObservation]:
+    def analyze_video_pair(self, original_path: Path, deidentified_path: Path, max_frames: int, progress_fn=None, profiler: StageProfiler | None = None) -> List[FaceObservation]:
+        load_start = time.perf_counter()
         frames_a, frames_b = self._paired_video_frames(original_path, deidentified_path, max_frames)
+        if profiler:
+            profiler.add("load", time.perf_counter() - load_start)
+        frames_a = self._maybe_resize_frames(frames_a, profiler)
+        frames_b = self._maybe_resize_frames(frames_b, profiler)
         if progress_fn:
             progress_fn(0.1, "frames decoded")
         observations: List[FaceObservation] = []
         track_manager = FaceTrackManager(threshold=self.track_threshold)
+        facenet_start = time.perf_counter()
+        lpips_duration = 0.0
         descriptors_a_sequence = self._detect_faces_in_batches(frames_a)
         descriptors_b_sequence = self._detect_faces_in_batches(frames_b)
         total_batches = max(1, len(descriptors_a_sequence))
@@ -133,7 +169,9 @@ class FaceSimilarityEngine:
                 if person_id is None:
                     continue
                 facenet_percent = self._cosine_percent(similarity)
+                style_start = time.perf_counter()
                 style_percent = self._style_percent(descriptor_a.image, descriptor_b.image)
+                lpips_duration += time.perf_counter() - style_start
                 observations.append(
                     FaceObservation(
                         person_id=person_id,
@@ -146,6 +184,10 @@ class FaceSimilarityEngine:
             if progress_fn:
                 fraction = batch_index / total_batches
                 progress_fn(0.1 + 0.8 * min(1.0, fraction), f"processing frames {batch_index}/{total_batches}")
+        facenet_duration = time.perf_counter() - facenet_start - lpips_duration
+        if profiler:
+            profiler.add("lpips", lpips_duration)
+            profiler.add("facenet", max(0.0, facenet_duration))
         if progress_fn:
             progress_fn(1.0, "faces analyzed")
         return observations
@@ -154,10 +196,40 @@ class FaceSimilarityEngine:
         image = Image.open(path)
         return image.convert("RGB")
 
+    def _maybe_resize_image(self, image: Image.Image, profiler: StageProfiler | None) -> Image.Image:
+        if not self.resize_to:
+            return image
+        if profiler:
+            start = time.perf_counter()
+        resized = image.resize(self.resize_to, Image.BILINEAR)
+        if profiler:
+            profiler.add("resize", time.perf_counter() - start)
+        return resized
+
+    def _maybe_resize_frames(self, frames: Sequence[Image.Image], profiler: StageProfiler | None) -> List[Image.Image]:
+        if not frames:
+            return []
+        if not self.resize_to:
+            return list(frames)
+        return [self._maybe_resize_image(frame, profiler) for frame in frames]
+
     def _detect_faces(self, image: Image.Image) -> List[FaceDescriptor]:
         boxes, probs = self.detector.detect(image)
         face_tensors = self.detector.extract(image, boxes, save_path=None)
         return self._build_descriptors(image, boxes, probs, face_tensors)
+
+    def _detect_faces_with_rotation(self, image: Image.Image) -> List[FaceDescriptor]:
+        descriptors = self._detect_faces(image)
+        if descriptors:
+            return descriptors
+        for angle in self.rotation_angles:
+            if not angle:
+                continue
+            rotated = image.rotate(angle, resample=Image.BILINEAR, expand=True)
+            descriptors = self._detect_faces(rotated)
+            if descriptors:
+                return descriptors
+        return []
 
     def _detect_faces_in_batches(self, images: Sequence[Image.Image]) -> List[List[FaceDescriptor]]:
         if not images:
@@ -252,7 +324,7 @@ class FaceSimilarityEngine:
 
     def _cosine_percent(self, value: float) -> float:
         percent = (value + 1.0) * 50.0
-        return float(max(0.0, min(100.0, percent)))
+        return self._clamp_percent(percent)
 
     def _cosine_similarity(self, embedding_a: np.ndarray, embedding_b: np.ndarray) -> float:
         value = float(np.dot(embedding_a, embedding_b))
@@ -293,11 +365,14 @@ class FaceSimilarityEngine:
             distance = float(self.lpips_model(tensor_a, tensor_b).item())
         clamped = min(max(distance, 0.0), self.lpips_distance_max)
         similarity = (1.0 - clamped / self.lpips_distance_max) * 100.0
-        return float(max(0.0, min(100.0, similarity)))
+        return self._clamp_percent(similarity)
 
     def _lpips_tensor(self, image: Image.Image) -> torch.Tensor:
         tensor = self.lpips_transform(image).unsqueeze(0).to(self.device)
         return tensor * 2.0 - 1.0
+
+    def _clamp_percent(self, value: float) -> float:
+        return float(max(0.1, min(99.9, value)))
 
     def _to_scalar(self, value: object) -> float:
         if value is None:
