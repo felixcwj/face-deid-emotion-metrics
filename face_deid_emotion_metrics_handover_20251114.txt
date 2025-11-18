@@ -146,7 +146,7 @@ function rapa {
     if (-not $Output) { $Output = Join-Path $BaseDir "rapa_report_samples.xlsx" }
     Set-Location "C:\projects\face-deid-emotion-metrics"
     $python = "C:\projects\face-deid-emotion-metrics\.venv\Scripts\python.exe"
-    & $python -m face_deid_emotion_metrics.cli --base-dir $BaseDir --output $Output @Args
+    & $python -m face_deid_emotion_metrics.cli --base-dir $BaseDir --output $Output --video-backend ffmpeg @Args
 }
 ```
 - Typical usage: `rapa` (defaults to `D:\RAPA`), or `rapa -BaseDir "D:\RAPA" -Output "D:\RAPA\custom.xlsx" --video-backend ffmpeg`. The helper always produces the three-sheet workbook plus `<BaseDir>\근거.txt`.

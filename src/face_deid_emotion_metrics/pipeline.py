@@ -240,8 +240,14 @@ class MetricsPipeline:
             "error": "",
         }
         start = time.perf_counter()
+        def log_callback(event: str, payload) -> None:
+            if event == "file_progress":
+                message = payload.get("message", "")
+                percent = payload.get("percent", 0.0)
+                logging.info("Processing %s: %s (%.1f%%)", relative_path, message, percent)
+        file_progress = _FileProgress(log_callback, relative_path)
         try:
-            observations = self._analyze_file(input_file, output_file, None, profiler)
+            observations = self._analyze_file(input_file, output_file, file_progress, profiler)
             metrics, person_count = self._aggregate_observations(observations, profiler=profiler)
             record["facenet_percent"] = metrics.get("facenet_percent")
             record["lpips_percent"] = metrics.get("lpips_percent")
@@ -251,6 +257,8 @@ class MetricsPipeline:
         except Exception as error:
             logging.error("Processing failed for %s: %s", relative_path, error)
             record["error"] = str(error)
+        finally:
+            file_progress.finish()
         total_time = time.perf_counter() - start
         record.update(self._stage_metrics(profiler, total_time))
         return record

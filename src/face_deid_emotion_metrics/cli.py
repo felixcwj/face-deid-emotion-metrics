@@ -22,7 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--style-threshold", type=float, default=70.0, help="LPIPS similarity threshold for style change detection")
     parser.add_argument("--lpips-distance-max", type=float, default=1.0, help="Maximum LPIPS distance mapped to 0 percent similarity")
     parser.add_argument("--max-files", type=int, help="Maximum number of files to process for debugging")
-    parser.add_argument("--video-backend", default="decord", help="Video decoding backend to use (decord is the default)")
+    parser.add_argument("--video-backend", default="auto", help="Video decoding backend to use (auto tries decord then ffmpeg)")
     parser.add_argument("--profile-only", action="store_true", help="Process a 10-sample deterministic profile run instead of writing Excel")
     parser.add_argument("--seed", type=int, default=42, help="Seed used for sampling files in profiling mode")
     parser.add_argument("--resize-512", action="store_true", help="Resize each frame or image to 512x512 before inference")

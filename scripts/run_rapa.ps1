@@ -9,4 +9,4 @@ if (-not $Output) {
 $projectRoot = 'C:\projects\face-deid-emotion-metrics'
 $pythonExe = Join-Path $projectRoot '.venv\Scripts\python.exe'
 Set-Location $projectRoot
-& $pythonExe -m face_deid_emotion_metrics.cli --base-dir $BaseDir --output $Output @Args
+& $pythonExe -m face_deid_emotion_metrics.cli --base-dir $BaseDir --output $Output --video-backend ffmpeg @Args

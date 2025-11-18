@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
+import logging
 import time
 
 import lpips
@@ -76,7 +77,7 @@ class FaceSimilarityEngine:
         lpips_distance_max: float = 1.0,
         track_threshold: float = 0.5,
         video_batch_size: int = 4,
-        video_backend: str = "decord",
+        video_backend: str = "auto",
         resize_to: Tuple[int, int] | None = None,
         mtcnn_thresholds: Tuple[float, float, float] = (0.4, 0.5, 0.5),
         mtcnn_min_face_size: int = 20,
@@ -215,7 +216,9 @@ class FaceSimilarityEngine:
 
     def _detect_faces(self, image: Image.Image) -> List[FaceDescriptor]:
         boxes, probs = self.detector.detect(image)
-        face_tensors = self.detector.extract(image, boxes, save_path=None)
+        face_tensors = None
+        if boxes is not None and len(boxes):
+            face_tensors = self.detector.extract(image, boxes, save_path=None)
         return self._build_descriptors(image, boxes, probs, face_tensors)
 
     def _detect_faces_with_rotation(self, image: Image.Image) -> List[FaceDescriptor]:
@@ -243,8 +246,12 @@ class FaceSimilarityEngine:
     def _detect_faces_batch(self, images: Sequence[Image.Image]) -> List[List[FaceDescriptor]]:
         if not images:
             return []
-        boxes_batch, probs_batch = self.detector.detect(list(images))
-        tensors_batch = self.detector.extract(list(images), boxes_batch, save_path=None)
+        try:
+            boxes_batch, probs_batch = self.detector.detect(list(images))
+            tensors_batch = self.detector.extract(list(images), boxes_batch, save_path=None)
+        except Exception as error:
+            logging.warning("Batched face detection failed (%s); falling back to single-frame mode", error)
+            return [self._detect_faces(image) for image in images]
         boxes_list = self._ensure_batch_list(boxes_batch, len(images))
         probs_list = self._ensure_batch_list(probs_batch, len(images))
         tensors_list = self._ensure_batch_list(tensors_batch, len(images))

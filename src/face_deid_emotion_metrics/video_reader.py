@@ -7,6 +7,7 @@ from pathlib import Path
 from shutil import which
 from typing import List, Sequence, Tuple
 
+import logging
 import numpy as np
 import torch
 from PIL import Image
@@ -24,7 +25,7 @@ class VideoBackendError(RuntimeError):
 @dataclass(frozen=True)
 class VideoSamplerConfig:
     device: torch.device
-    backend: str = "decord"
+    backend: str = "auto"
     ffmpeg_hwaccel: str = "cuda"
 
 
@@ -33,15 +34,34 @@ class VideoPairSampler:
 
     def __init__(self, config: VideoSamplerConfig) -> None:
         backend = config.backend.lower()
-        if backend == "decord":
-            self.backend = _DecordBackend(config.device)
+        if backend == "auto":
+            self.backends: List[Tuple[str, object]] = []
+            try:
+                self.backends.append(("decord", _DecordBackend(config.device)))
+            except VideoBackendError as error:
+                logging.warning("Decord backend unavailable: %s", error)
+            try:
+                self.backends.append(("ffmpeg", _FfmpegBackend(hwaccel=config.ffmpeg_hwaccel)))
+            except VideoBackendError as error:
+                logging.warning("ffmpeg backend unavailable: %s", error)
+            if not self.backends:
+                raise VideoBackendError("No video backend is available (auto mode)")
+        elif backend == "decord":
+            self.backends = [("decord", _DecordBackend(config.device))]
         elif backend == "ffmpeg":
-            self.backend = _FfmpegBackend(hwaccel=config.ffmpeg_hwaccel)
+            self.backends = [("ffmpeg", _FfmpegBackend(hwaccel=config.ffmpeg_hwaccel))]
         else:
             raise ValueError(f"Unsupported video backend: {config.backend}")
 
     def sample(self, path_a: Path, path_b: Path, max_frames: int) -> Tuple[List[Image.Image], List[Image.Image]]:
-        return self.backend.sample(path_a, path_b, max_frames)
+        errors: List[str] = []
+        for name, backend in self.backends:
+            try:
+                return backend.sample(path_a, path_b, max_frames)
+            except VideoBackendError as error:
+                logging.warning("Video backend %s failed for %s: %s", name, path_a, error)
+                errors.append(f"{name}: {error}")
+        raise VideoBackendError("; ".join(errors))
 
     @staticmethod
     def frame_indices(total: int, max_frames: int) -> List[int]:

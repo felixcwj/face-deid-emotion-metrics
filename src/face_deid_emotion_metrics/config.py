@@ -60,7 +60,7 @@ class PipelineConfig:
     lpips_distance_max: float = 1.0
     max_files: Optional[int] = None
     emoti_model_name: str = DEFAULT_EMOTI_MODEL_NAME
-    video_backend: str = "decord"
+    video_backend: str = "auto"
     resize_to: Optional[Tuple[int, int]] = None
     assume_style_change_for_all: bool = ASSUME_STYLE_CHANGE_FOR_ALL
     style_change_lpips_threshold: float = STYLE_CHANGE_LPIPS_THRESHOLD
