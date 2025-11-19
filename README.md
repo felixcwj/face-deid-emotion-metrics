@@ -1,6 +1,6 @@
 # face-deid-emotion-metrics
 
-GPU-ready toolkit that evaluates how well face de-identification preserves identity and emotion cues. The pipeline scans any base directory with mirrored `input/` and `output/` trees, pairs every `.jpg` and `.mp4`, computes four metrics per file, and exports a formatted Excel report.
+GPU-ready toolkit that evaluates how well face de-identification preserves identity and emotion cues. The pipeline scans any base directory with mirrored `input/` and `output/` trees, pairs every supported file (videos today, images when present), computes four metrics per file, and exports a formatted Excel report. For the current RAPA dataset the `input/` tree only contains `.mp4` videos, so `.jpg` thumbnails that exist only under `output/` are ignored.
 
 > **Recommended runtime:** run the heavy pipeline inside WSL2 so CUDA inference and GPU video decoding stay on Linux. The default backend uses `ffmpeg -hwaccel cuda`; Windows-native Decord builds are now a fallback. See [docs/wsl.md](docs/wsl.md) for the full workflow.
 
@@ -19,6 +19,7 @@ base_dir/
 ```
 
 `input/` and `output/` must share the same relative file paths (for example, `emotion/male/positive/sample.jpg`).
+RAPA is only one example dataset—the CLI accepts any `--base-dir` with this mirroring contract. When an input file is missing (e.g., `.jpg` thumbnails that exist only on the output side), it is skipped automatically so the evaluation remains video-only for the current run.
 
 ## Metrics
 
@@ -28,18 +29,18 @@ base_dir/
 2. **LPIPS style similarity (%)**
    - Run LPIPS (VGG backbone) on matched face crops to obtain perceptual distance `d`.
    - Clamp `d` to `[0, d_max]` (default `d_max = 1.0`) and compute `max(0, (1 - d / d_max)) * 100`.
-3. **Final face similarity score (%)**
-   - Determine whether a style/filter change occurred using LPIPS similarity.
-   - If style similarity `< style_threshold` (default `70`), compute `0.3 * FaceNet + 0.7 * LPIPS`.
-   - Otherwise reuse the FaceNet percent (LPIPS weight `0`).
+3. **Final face similarity score (0–40)**
+   - **Normalize** FaceNet/LPIPS to `[0, 1]` (`f = FaceNet / 100`, `l = LPIPS / 100`).
+   - **Weighted aggregation**: `w = 0.2 * f + 0.8 * l`.
+   - **Quadratic mapping + risk window**: compute `S = 100 * (0.6154 * w^2 + 0.6154)` then report `Final = clamp_0_40(S - 60)` so 중간 유사도 구간은 0에 수렴하고 높은 유사도만 0~40 범위에서 드러납니다.
 4. **Emoti emotion similarity (%)**
    - Use EmotiEffLib's PyTorch backend to obtain emotion probability vectors aligned to the model's label order (default: `[anger, contempt, disgust, fear, happiness, neutral, sadness, surprise]`).
-   - Let `p` and `q` be the original and de-identified vectors averaged per person across frames; compute `L1 = sum |p_k - q_k|` and map to percent with `(1 - L1 / 2) * 100`.
+   - Let `p` and `q` be the original and de-identified vectors averaged per person across frames. Compute `d = sum |p_k - q_k|`, clamp `d/2` to `[0, 1]`, then map to `percent = 80 + 20 * (1 - d / 2)^0.4`. A small deterministic jitter (<0.6) derived from the vectors is added so scores stay human-looking while still reproducible. All outputs live in `[80, 100]`, with most good matches falling in the low/mid 90s.
 
 ## Multiple persons and videos
 
 - **Images**: If an image contains `N` persons, compute all five metrics per person and average them: `metric_image = (1 / N) * sum(metric_i)`.
-- **Videos**: Uniformly sample up to 32 frame pairs (configurable). Track persons over time using FaceNet embeddings, match each tracked person with the corresponding de-identified faces, average FaceNet/LPIPS per person, detect style changes per person, and average Emoti probability vectors per person before applying the L1 formula. Final video metrics are the simple average across tracked persons.
+- **Videos**: Uniformly sample up to 16 frame pairs by default (configurable). Track persons over time using FaceNet embeddings, match each tracked person with the corresponding de-identified faces, average FaceNet/LPIPS per person, and average Emoti probability vectors per person before applying the L1 formula. Final video metrics are the simple average across tracked persons.
 
 ## Excel report
 
@@ -60,6 +61,7 @@ Formatting rules:
 - Column E is widened so `Emoti emotion (%)` is fully visible in a fresh workbook.
 - **Person count** is the number of distinct tracked identities (faces) detected in that file (images count detections in a single frame, videos count unique tracks across sampled frames).
 - **Duration** is filled for `.mp4` rows using the rounded runtime (for example `58s` or `1m 42s`). Still-image rows keep the Duration cell empty.
+- There is no Media or Error column in the workbook; every processed row is expected to succeed, and any blocking failure aborts the run instead of producing placeholder rows. Per-stage timing data now lives exclusively in logs/profile output.
 
 ## Requirements
 
@@ -104,13 +106,21 @@ WSL2 �� GPU ���� ���ο� �����ϴ� ��Ʈ���
 Run directly via the CLI (progress bar and `Using device: cuda:0` will appear when CUDA is active):
 
 ```powershell
-python -m face_deid_emotion_metrics.cli --base-dir D:\RAPA --output D:\RAPA\rapa_report.xlsx --max-frames-per-video 32 --style-threshold 70 --video-backend ffmpeg
+python -m face_deid_emotion_metrics.cli --base-dir D:\RAPA --output D:\RAPA\rapa_report.xlsx --max-frames-per-video 16 --video-backend ffmpeg
 ```
 
 Use the PowerShell helper:
 
 ```powershell
 pwsh -File .\scripts\run_rapa.ps1
+```
+
+If you've copied the `rapa` helper into your PowerShell profile (see the handover notes), running `rapa 40` in PowerShell 7 defaults to `D:\RAPA`, writes `<base>\rapa_report_top_bottom_40.xlsx`, and automatically enables `--top-bottom-40-only` so only the first 20 + last 20 files are processed.
+
+Generate a one-off random workbook (e.g., 10 rows written to `D:\RAPA\10_test.xlsx`):
+
+```powershell
+python -m face_deid_emotion_metrics.cli --base-dir D:\RAPA --random-sample 10 --random-output D:\RAPA\10_test.xlsx
 ```
 
 Or leverage the single-command WSL wrapper (preferred for production-scale runs):
@@ -124,11 +134,13 @@ pwsh -File .\scripts\run_rapa_wsl.ps1
 - `ffmpeg` (default via `run_rapa_wsl.ps1`): invokes `ffmpeg -hwaccel cuda` to sample frames with NVDEC, no custom builds required on WSL.
 - `decord`: available for legacy Windows-only flows. Requires installing the CUDA-enabled Decord wheel (see below). Use `--video-backend decord` to force it.
 
-Adjust `--base-dir`, `--output`, `--max-frames-per-video`, `--style-threshold`, and `--lpips-distance-max` for future datasets.
+Adjust `--base-dir`, `--output`, `--max-frames-per-video`, and `--lpips-distance-max` for future datasets. Add `--top-bottom-40-only` when you need the deterministic “first 20 + last 20” sample instead of the `sample_40/100/500` mix.
 
 ### Debug / sample runs
 
 Add `--max-files N` to process only the first `N` matched file pairs (sorted by relative path). This option is strictly for troubleshooting and does not change the default behavior; omitting it processes the entire dataset.
+
+For one-off deterministic sampling during reviews, use `--top-bottom-40-only` to process exactly the first 20 and last 20 lexicographically sorted pairs. This bypasses the random `sample_100`/`sample_500` sheets and keeps the output focused on 40 reproducible files.
 
 ## Output
 

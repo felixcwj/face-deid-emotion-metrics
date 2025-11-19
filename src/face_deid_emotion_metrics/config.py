@@ -6,12 +6,6 @@ import torch
 import torch.backends.cudnn as cudnn
 
 DEFAULT_EMOTI_MODEL_NAME = "enet_b0_8_va_mtl"
-FINAL_SCORE_FACENET_WEIGHT = 0.2
-FINAL_SCORE_LPIPS_WEIGHT = 0.8
-FINAL_SCORE_SCALE = 0.6154
-FINAL_SCORE_BIAS = 0.6154
-ASSUME_STYLE_CHANGE_FOR_ALL = True
-STYLE_CHANGE_LPIPS_THRESHOLD = 60.0
 MTCNN_THRESHOLDS = (0.4, 0.5, 0.5)
 MTCNN_MIN_FACE_SIZE = 20
 DETECTOR_ROTATION_ANGLES = (0, -30, 30, -60, 60)
@@ -24,6 +18,29 @@ def require_cuda_device() -> torch.device:
     return torch.device("cuda:0")
 
 
+FINAL_SCORE_FACENET_WEIGHT = 0.2
+FINAL_SCORE_LPIPS_WEIGHT = 0.8
+FINAL_SCORE_SCALE = 0.6154
+FINAL_SCORE_BIAS = 0.6154
+
+
+@dataclass(frozen=True)
+class PipelineConfig:
+    base_dir: Path
+    input_dir: Path
+    output_dir: Path
+    output_path: Path
+    device: torch.device
+    file_extensions: Tuple[str, ...] = (".jpg", ".jpeg", ".png", ".mp4", ".mov", ".mkv")
+    max_frames_per_video: int = 16
+    lpips_distance_max: float = 1.0
+    max_files: Optional[int] = None
+    emoti_model_name: str = DEFAULT_EMOTI_MODEL_NAME
+    video_backend: str = "auto"
+    resize_to: Optional[Tuple[int, int]] = None
+    mtcnn_thresholds: Tuple[float, float, float] = MTCNN_THRESHOLDS
+    mtcnn_min_face_size: int = MTCNN_MIN_FACE_SIZE
+    detector_rotation_angles: Tuple[int | float, ...] = DETECTOR_ROTATION_ANGLES
 def final_score_percent(
     facenet_percent: float,
     lpips_percent: float,
@@ -43,28 +60,6 @@ def final_score_percent(
         weighted = 0.0
     else:
         weighted = (facenet_weight * facenet_norm + lpips_weight * lpips_norm) / weight_sum
-    value = (weighted * weighted) * scale * 100.0 + bias
-    return max(0.1, min(99.9, value))
-
-
-@dataclass(frozen=True)
-class PipelineConfig:
-    base_dir: Path
-    input_dir: Path
-    output_dir: Path
-    output_path: Path
-    device: torch.device
-    file_extensions: Tuple[str, ...] = (".jpg", ".jpeg", ".png", ".mp4", ".mov", ".mkv")
-    max_frames_per_video: int = 32
-    style_similarity_threshold: float = 70.0
-    lpips_distance_max: float = 1.0
-    max_files: Optional[int] = None
-    emoti_model_name: str = DEFAULT_EMOTI_MODEL_NAME
-    video_backend: str = "auto"
-    resize_to: Optional[Tuple[int, int]] = None
-    assume_style_change_for_all: bool = ASSUME_STYLE_CHANGE_FOR_ALL
-    style_change_lpips_threshold: float = STYLE_CHANGE_LPIPS_THRESHOLD
-    style_change_keywords: Tuple[str, ...] = ("filter", "styled", "style", "fx")
-    mtcnn_thresholds: Tuple[float, float, float] = MTCNN_THRESHOLDS
-    mtcnn_min_face_size: int = MTCNN_MIN_FACE_SIZE
-    detector_rotation_angles: Tuple[int | float, ...] = DETECTOR_ROTATION_ANGLES
+    value = 100.0 * (scale * (weighted * weighted) + bias)
+    risk = value - 60.0
+    return max(0.0, min(40.0, risk))

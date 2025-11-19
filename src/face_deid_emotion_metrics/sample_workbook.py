@@ -155,6 +155,7 @@ class SampleWorkbook:
                 cell = sheet.cell(row=row, column=final_score_index)
                 existing = cell.font or Font()
                 cell.font = Font(bold=True, name=existing.name, size=existing.sz)
+        self._highlight_final_scores(sheet, final_score_index, max_row)
         self._apply_borders(sheet, table_indices, max_row, boundary_pairs)
         self._auto_fit_columns(sheet, table_indices, decimal_indices, integer_indices)
 
@@ -224,3 +225,28 @@ class SampleWorkbook:
             top=top or cell.border.top,
             bottom=bottom or cell.border.bottom,
         )
+
+    def _highlight_final_scores(self, sheet: Worksheet, column_index: int, max_row: int) -> None:
+        if not column_index or max_row <= 1:
+            return
+        for row in range(2, max_row + 1):
+            cell = sheet.cell(row=row, column=column_index)
+            value = cell.value
+            if value in ("", None):
+                continue
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                continue
+            if numeric >= 40.0:
+                current_font = cell.font or Font()
+                cell.font = Font(
+                    bold=current_font.bold,
+                    italic=current_font.italic,
+                    name=current_font.name,
+                    size=current_font.sz,
+                    vertAlign=current_font.vertAlign,
+                    underline=current_font.underline,
+                    strike=current_font.strike,
+                    color="9C0006",
+                )

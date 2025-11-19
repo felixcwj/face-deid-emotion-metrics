@@ -227,19 +227,15 @@ class MetricsPipeline:
         return list(pairs)
 
     def _process_single_pair(self, relative_path: str, input_file: Path, output_file: Path) -> Dict[str, object]:
-        profiler = StageProfiler()
         record: Dict[str, object] = {
             "filename": relative_path,
-            "media_type": self._media_type(input_file),
             "facenet_percent": None,
             "lpips_percent": None,
             "final_score_percent": None,
             "emoti_emotion_percent": None,
             "person_count": 0,
             "duration_label": self._video_duration_label(input_file) if input_file.suffix.lower() in VIDEO_EXTENSIONS else "",
-            "error": "",
         }
-        start = time.perf_counter()
         def log_callback(event: str, payload) -> None:
             if event == "file_progress":
                 message = payload.get("message", "")
@@ -248,22 +244,20 @@ class MetricsPipeline:
         file_progress = _FileProgress(log_callback, relative_path)
         try:
             file_progress.update(5.0, "loading files")
-            observations = self._analyze_file(input_file, output_file, file_progress, profiler)
+            observations = self._analyze_file(input_file, output_file, file_progress)
             file_progress.update(75.0, "emotion inference")
-            metrics, person_count = self._aggregate_observations(observations, profiler=profiler)
+            metrics, person_count = self._aggregate_observations(observations)
             file_progress.update(90.0, "aggregating metrics")
             record["facenet_percent"] = metrics.get("facenet_percent")
             record["lpips_percent"] = metrics.get("lpips_percent")
             record["final_score_percent"] = metrics.get("final_score_percent")
             record["emoti_emotion_percent"] = metrics.get("emoti_emotion_percent")
             record["person_count"] = person_count
-        except Exception as error:
-            logging.error("Processing failed for %s: %s", relative_path, error)
-            record["error"] = str(error)
+        except Exception:
+            logging.exception("Processing failed for %s", relative_path)
+            raise
         finally:
             file_progress.finish()
-        total_time = time.perf_counter() - start
-        record.update(self._stage_metrics(profiler, total_time))
         return record
 
     def _analyze_file(self, input_file: Path, output_file: Path, file_progress: _FileProgress | None, profiler: StageProfiler | None = None) -> List[FaceObservation]:
@@ -339,7 +333,6 @@ class MetricsPipeline:
             "emoti_emotion_percent": emoti_percent,
             "person_count": person_count,
             "duration_label": duration_label,
-            "media_type": self._media_type(input_file),
         }
         return record
 
@@ -366,29 +359,12 @@ class MetricsPipeline:
             "emoti_emotion_percent": None,
         }
 
-    def _media_type(self, path: Path) -> str:
-        suffix = path.suffix.lower()
-        return "video" if suffix in VIDEO_EXTENSIONS else "image"
-
     def _filter_pairs_by_kind(self, pairs: List[Tuple[str, Path, Path]], kind: str) -> List[Tuple[str, Path, Path]]:
         if kind == "image":
             return [pair for pair in pairs if pair[1].suffix.lower() in IMAGE_EXTENSIONS]
         if kind == "video":
             return [pair for pair in pairs if pair[1].suffix.lower() in VIDEO_EXTENSIONS]
         return pairs
-
-    def _stage_metrics(self, profiler: StageProfiler, total_time: float) -> Dict[str, int]:
-        totals = profiler.totals()
-        result: Dict[str, int] = {}
-        stage_sum = 0.0
-        for stage in ("load", "resize", "facenet", "lpips", "emoti"):
-            value = totals.get(stage, 0.0)
-            stage_sum += value
-            result[f"{stage}_ms"] = int(round(value * 1000))
-        other = max(0.0, total_time - stage_sum)
-        result["other_ms"] = int(round(other * 1000))
-        result["total_ms"] = int(round(total_time * 1000))
-        return result
 
     def _video_duration_label(self, path: Path) -> str:
         cap = cv2.VideoCapture(str(path))

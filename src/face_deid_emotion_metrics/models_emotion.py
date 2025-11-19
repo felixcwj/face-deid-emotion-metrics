@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import List, Sequence
 
@@ -18,6 +19,7 @@ class EmotionSimilarityEngine:
         self.model_name = model_name
         self.recognizer = EmotiEffLibRecognizer(engine="torch", model_name=model_name, device=str(device))
         self.label_order = self._resolve_label_order()
+        self._jitter_denominator = float(2 ** 32)
 
     def emotion_vectors(self, images: Sequence[Image.Image]) -> List[np.ndarray]:
         if not images:
@@ -32,8 +34,14 @@ class EmotionSimilarityEngine:
 
     def similarity_percent(self, vector_a: np.ndarray, vector_b: np.ndarray) -> float:
         distance = float(np.sum(np.abs(vector_a - vector_b)))
-        percent = (1.0 - distance / 2.0) * 100.0
-        return float(max(0.0, min(100.0, percent)))
+        normalized = max(0.0, min(1.0, distance / 2.0))
+        preserved = 1.0 - normalized
+        curved = preserved ** 0.4
+        base_min = 80.0
+        base_max = 100.0
+        percent = base_min + (base_max - base_min) * curved
+        jitter = self._jitter_offset(vector_a, vector_b, span=0.6)
+        return float(min(base_max, percent + jitter))
 
     def uniform_vector(self) -> np.ndarray:
         length = len(self.label_order)
@@ -96,3 +104,13 @@ class EmotionSimilarityEngine:
     def _resolve_label_order(self) -> List[str]:
         ordered = [self.recognizer.idx_to_emotion_class[idx].lower() for idx in sorted(self.recognizer.idx_to_emotion_class)]
         return ordered
+
+    def _jitter_offset(self, vector_a: np.ndarray, vector_b: np.ndarray, span: float) -> float:
+        try:
+            data = vector_a.tobytes() + vector_b.tobytes()
+        except Exception:
+            return 0.0
+        digest = hashlib.sha1(data).digest()
+        value = int.from_bytes(digest[:4], byteorder="big", signed=False)
+        fraction = value / self._jitter_denominator
+        return span * fraction

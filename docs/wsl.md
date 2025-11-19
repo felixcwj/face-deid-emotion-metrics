@@ -11,7 +11,7 @@ This project now prefers running the heavy pipeline inside **WSL2** because the 
    wsl.exe -- sudo apt-get update
    wsl.exe -- sudo apt-get install -y cuda-toolkit
    ```
-4. The dataset must be accessible from Windows as `D:\RAPA` (exposed to WSL as `/mnt/d/RAPA`).
+4. Your dataset must be accessible from Windows (RAPA lives at `D:\RAPA`, which maps to `/mnt/d/RAPA` inside WSL).
 
 Verify GPU access from WSL:
 
@@ -79,4 +79,4 @@ python -m face_deid_emotion_metrics.cli \
     --output /mnt/d/RAPA/rapa_report_full_wsl.xlsx
 ```
 
-Use `--max-files` to limit processed entries. The `--video-backend` flag defaults to `ffmpeg` (NVDEC via `ffmpeg -hwaccel cuda`) and can be switched to `decord` if you install the CUDA wheel manually.
+Use `--max-files` to limit processed entries. Add `--top-bottom-40-only` when you want the deterministic “first 20 + last 20” sample instead of the sample_40/100/500 mix. The `--video-backend` flag defaults to `ffmpeg` (NVDEC via `ffmpeg -hwaccel cuda`) and can be switched to `decord` if you install the CUDA wheel manually.

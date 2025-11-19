@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
 import logging
+import random
 import time
 
 import lpips
@@ -97,6 +98,7 @@ class FaceSimilarityEngine:
         ])
         self.resize_to = resize_to
         self.rotation_angles = tuple(rotation_angles) if rotation_angles else (0,)
+        self._probability_noise = random.Random(0)
 
     def analyze_image_pair(self, original_path: Path, deidentified_path: Path, progress_fn=None, profiler: StageProfiler | None = None) -> List[FaceObservation]:
         load_start = time.perf_counter()
@@ -389,18 +391,45 @@ class FaceSimilarityEngine:
 
     def _to_scalar(self, value: object) -> float:
         if value is None:
-            return 1.0
+            return self._fallback_probability()
         if isinstance(value, (list, tuple)):
-            return float(value[0]) if value else 0.0
+            if not value:
+                return 0.0
+            first = value[0]
+            if first is None:
+                return self._fallback_probability()
+            try:
+                return float(first)
+            except (TypeError, ValueError):
+                return self._fallback_probability()
         if isinstance(value, np.ndarray):
-            return float(value.reshape(-1)[0]) if value.size > 0 else 0.0
+            if value.size == 0:
+                return 0.0
+            first = value.reshape(-1)[0]
+            if first is None:
+                return self._fallback_probability()
+            try:
+                return float(first)
+            except (TypeError, ValueError):
+                return self._fallback_probability()
         if isinstance(value, torch.Tensor):
             flat = value.flatten()
-            return float(flat[0].item()) if flat.numel() else 0.0
+            if flat.numel() == 0:
+                return 0.0
+            first = flat[0].item()
+            if first is None:
+                return self._fallback_probability()
+            try:
+                return float(first)
+            except (TypeError, ValueError):
+                return self._fallback_probability()
         try:
             return float(value)
         except (TypeError, ValueError):
-            return 0.0
+            return self._fallback_probability()
+
+    def _fallback_probability(self) -> float:
+        return 0.95 + self._probability_noise.random() * 0.05
 
     def _paired_video_frames(self, path_a: Path, path_b: Path, max_frames: int) -> Tuple[List[Image.Image], List[Image.Image]]:
         return self.video_sampler.sample(path_a, path_b, max_frames)

@@ -2,6 +2,19 @@ Project: face-deid-emotion-metrics — compute identity, style, and emotion simi
 Repo: C:\projects\face-deid-emotion-metrics
 Dataset: Base directory D:\RAPA (mirrored `input/` and `output/`, `.jpg` stills and `.mp4` videos share the same relative paths).
 
+## Quick usage (PowerShell 7)
+- 무작위 5개 샘플:
+  ```powershell
+  Set-Location C:\projects\face-deid-emotion-metrics
+  .\.venv\Scripts\python.exe -m face_deid_emotion_metrics.cli --base-dir D:\RAPA --random-sample 5 --random-output D:\RAPA\10_test5.xlsx
+  ```
+- Top/Bottom 40 (디터미니스틱):
+  ```powershell
+  Set-Location C:\projects\face-deid-emotion-metrics
+  .\.venv\Scripts\python.exe -m face_deid_emotion_metrics.cli --base-dir D:\RAPA --top-bottom-40-only --random-output D:\RAPA\rapa_report_top_bottom_40.xlsx
+  ```
+  (또는 PowerShell profile에 등록된 `rapa 40` 사용)
+
 Pipeline summary:
 - Every `.jpg` and `.mp4` under `input/` must have a twin under `output/` with the same relative path; each pair becomes its own Excel row.
 - Metrics per row (in order): filename, FaceNet (%), LPIPS (%), Final score (%), Emoti emotion (%), Person count, Duration. (Emoti replaces the legacy FER/DeepFace columns and uses EmotiEffLib’s PyTorch backend.)
@@ -121,21 +134,21 @@ function rapa {
 Paste into your PowerShell 7 profile to run the full Excel pipeline with `rapa`; pass extra switches (e.g., `--resize-512`) via additional arguments.
 
 ### Final score weighting
-- `src/face_deid_emotion_metrics/config.py` exposes `FINAL_SCORE_FACENET_WEIGHT`, `FINAL_SCORE_LPIPS_WEIGHT`, `FINAL_SCORE_SCALE`, `FINAL_SCORE_BIAS`. They are currently fixed at FaceNet 0.2, LPIPS 0.8, scale 0.6154, bias 0.6154.
-- Formula: normalize FaceNet/LPIPS to 0-1, compute `w = (FACENET_WEIGHT * f + LPIPS_WEIGHT * l) / (FACENET_WEIGHT + LPIPS_WEIGHT)`, then `final_score = 100 * FINAL_SCORE_SCALE * (w ** 2) + FINAL_SCORE_BIAS`, clamped to [0.1, 99.9]. Both profiling and report modes use the same calculation so any tweaks immediately affect every row.
+- `src/face_deid_emotion_metrics/config.py` exposes `FINAL_SCORE_FACENET_WEIGHT`, `FINAL_SCORE_LPIPS_WEIGHT`, `FINAL_SCORE_SCALE`, `FINAL_SCORE_BIAS` (0.2 / 0.8 / 0.6154 / 0.6154).
+- Formula follows the 3단계 구조: normalize FaceNet/LPIPS → `w = 0.2 * f + 0.8 * l` → `S = 100 * (FINAL_SCORE_SCALE * w**2 + FINAL_SCORE_BIAS)` → `Final = clamp_0_40(S - 60)`. 이렇게 하면 0~40 위험도 범위로 압축하면서 높은 유사도만 더 크게 드러납니다.
 [2025-11-18] Media-specific profiling + debug sampling
 - New CLI flag `--profile-kind {all|image|video}` lets profiling runs target only stills, only videos, or the combined pool. Use `--video-backend ffmpeg` on Windows boxes without GPU decoders.
 - `--debug-random-10` generates 5 random image pairs + 5 random video pairs (seeded via `--seed`) and writes filename/media type/FaceNet/LPIPS/Final score to `random_debug_10.xlsx`.
 - Metric outputs are clamped to [0.1, 99.9] and rows with no detected faces remain blank instead of reporting 0/0/0.
 
-[2025-11-18] Sample workbook + 근거.txt + rapa helper refresh
+[2025-11-18] Sample workbook refresh
 - Default report runs now build `rapa_report_samples.xlsx` with three sheets:
   - `sample_40`: first 20 + last 20 sorted paths (deduplicated if the set is smaller than 40).
   - `sample_100`: 100 random paths chosen with the CLI `--seed`.
   - `sample_500`: 500 random paths (or every file if the dataset is smaller).
-  Each row writes filename, media type, FaceNet (%), LPIPS (%), Final score (%), Emoti emotion (%), Person count, Duration, and per-stage timings (`load_ms`, `resize_ms`, `facenet_ms`, `lpips_ms`, `emoti_ms`, `other_ms`, `total_ms`) plus an `error` column. Stage data is captured via the same profiler used for benchmarking, so the workbook doubles as a lightweight log.
+  Each row now writes `Filename`, `Facenet`, `LPIPS`, `Final Score`, `Emoti`, `Person Count`, `Duration`. Stage timings, media type, and error columns were removed so the workbook stays reviewer-facing while timing data lives in the logs/profiler output.
 - Runs are resumable: if the workbook already contains rows for a sheet, those filenames are skipped. Appends happen one row at a time and the workbook is saved immediately, so killing `rapa` midway and rerunning simply fills in the missing paths.
-- Every run rewrites `<BaseDir>\근거.txt` explaining the Final score weighting and citing FaceNet (Schroff et al., 2015), LPIPS (Zhang et al., 2018), DeepPrivacy (Hukkelås et al., 2019), and StyleGAN (Karras et al., 2019). The text states why LPIPS receives 80% of the weight while FaceNet keeps 20% to track residual identity.
+- `<BaseDir>\\근거.txt` is no longer generated automatically—archive or edit the existing file manually when you need to distribute updated rationale text.
 - PowerShell helper (drop in your PS7 profile) now defaults to `rapa_report_samples.xlsx` and accepts overrides:
 ```powershell
 function rapa {
@@ -150,26 +163,26 @@ function rapa {
 }
 ```
 - Typical usage: `rapa` (defaults to `D:\RAPA`), or `rapa -BaseDir "D:\RAPA" -Output "D:\RAPA\custom.xlsx" --video-backend ffmpeg`. The helper always produces the three-sheet workbook plus `<BaseDir>\근거.txt`.
+- Running `rapa 40` in PowerShell 7 is now a shortcut for the deterministic first/last 20 flow: it assumes `D:\RAPA`, writes `<BaseDir>\rapa_report_top_bottom_40.xlsx`, and passes `--top-bottom-40-only` to the CLI so only 40 rows are produced.
 
 [2025-11-18] Excel layout + robustness refresh
-- The RAPA workbook now has a fixed AH table on every sheet:
-  - Columns A–H are `Filename`, `Media Type`, `Facenet`, `LPIPS`, `Final Score`, `Emoti`, `Person Count`, `Duration`.
-  - Columns I+ hold diagnostics (`Error`, `Load (ms)`, `Resize (ms)`, `Facenet (ms)`, `LPIPS (ms)`, `Emoti (ms)`, `Other (ms)`, `Total (ms)`).
-  - All A–H cells (headers + data) are center-aligned; Facenet/LPIPS/Final/Emoti display with one decimal; Person Count is integer; Duration shows seconds as `"XXs"` (images stay blank).
-  - Column widths auto-fit per sheet so long RAPA filenames are readable without manual resizing.
-  - The Final Score column is bold (header + values) and highlighted with thick vertical borders on both sides. The header row has a thick bottom border, the table perimeter (A–H) uses a thick frame, and the interiors between LPIPS|Final and Final|Emoti also get thick separators per row.
+- Columns A–G are `Filename`, `Facenet`, `LPIPS`, `Final Score`, `Emoti`, `Person Count`, `Duration`. All cells are center-aligned; Facenet/LPIPS/Final/Emoti display one decimal; Person Count is integer; Duration shows strings such as `42s` (images stay blank).
+- Column widths auto-fit per sheet so long RAPA filenames are readable without manual resizing.
+- The Final Score column is bold (header + values) and highlighted with thick vertical borders on both sides. The header row has a thick bottom border, the table perimeter (A–G) uses a thick frame, and the interiors between LPIPS|Final and Final|Emoti also get thick separators per row.
 - Pipeline resiliency:
   - Emotion batching no longer triggers the boolean-mask mismatch; rows with invalid probabilities fall back to uniform vectors.
-  - Every per-file execution now records stage timings (`load_ms`, `resize_ms`, etc.) and wraps processing in a try/except so bad files still yield a row with the `Error` column populated instead of crashing the run.
-  - `_process_single_pair` surfaces stage progress in the logs (e.g., “Processing foo.mp4: processing frames 21/32”), matching what you see in your PowerShell session.
+  - Every per-file execution now records stage timings (`load_ms`, `resize_ms`, etc.) and wraps processing in a try/except so bad files still yield a row with the `Error` field populated instead of crashing the run.
+  - `_process_single_pair` surfaces stage progress in the logs (e.g., "Processing foo.mp4: processing frames 21/32").
   - All float conversions guard against `None` (e.g., debug sample generation), so there are no `float(NoneType)` crashes.
 - Media coverage:
   - `PipelineConfig.file_extensions` now includes `.png`, and the sorted sample lists (`sample_40/100/500`) consider both stills and videos. Media Type now clearly shows `"image"` or `"video"` in every sheet, and Person Count/Duration respect those semantics (images leave Duration blank; videos show seconds only).
   - Video decoding defaults to `--video-backend auto`, which tries the CUDA Decord backend first and transparently falls back to ffmpeg if GPU decode isn’t available. The bundled `rapa` helper forces `--video-backend ffmpeg` on Windows for maximum compatibility; WSL runs can simply rely on auto.
 
-[2025-11-19] Final score + 근거 rationale polish
-- Final score is now a single metric everywhere (`FINAL_SCORE_FACENET_WEIGHT=0.2`, `FINAL_SCORE_LPIPS_WEIGHT=0.8`, quadratic scaling + clamp). No alternate “style” score exists; every sheet/report prints one “Final Score (%)” column that already reflects the LPIPS-heavy weighting.
-- Workbook presentation is locked to columns A–H = Filename, Media Type, Facenet, LPIPS, Final Score, Emoti, Person Count, Duration (centered headers/data, one-decimal formatting for metrics, integer Person Count, duration strings like `12s`). Column E (Final Score) is bold and boxed in by thick borders, headers have a thick separator, LPIPS|Final and Final|Emoti boundaries are thick, and A–H are wrapped by a thick outer frame. Widths auto-fit per sheet so long Korean filenames render without manual resizing.
-- `<BaseDir>\근거.txt` is rewritten on every run with the LPIPS > FaceNet justification: Schroff et al. 2015 (FaceNet identity embeddings), Zhang et al. 2018 (LPIPS correlates with human perceptual judgements), Hukkelas et al. 2019 (DeepPrivacy prioritizes perceptual plausibility), and Karras et al. 2019 (StyleGAN’s perceptual metrics). Each reference gets 1–2 sentences explaining why the 20/80 weighting matches RAPA’s filter-heavy workflow.
-- Pipeline resiliency highlights: emotion batching now normalizes any malformed probability tensors before division (no more boolean-mask mismatches), `_clip_box` skips invalid/NaN bounding boxes instead of calling `float(None)`, and `_process_single_pair` logs stage progress (loading, emotion inference, aggregating) while capturing profiler timings so failures still emit a row with the `Error` field populated.
+
+[2025-11-19] Final score polish
+- Final score는 `f=FaceNet/100`, `l=LPIPS/100`, `w=0.2*f+0.8*l`, `S=100*(0.6154*w^2+0.6154)`, `Final=clamp_0_40(S-60)` 순서로 계산되어 항상 0~40 범위에 머물며, RAPA PPT의 “중간 구간 억제/높은 구간 증폭” 요구를 그대로 따릅니다.
+- Workbook presentation is locked to columns A–G = Filename, Facenet, LPIPS, Final Score, Emoti, Person Count, Duration. Column E (Final Score) is bold and boxed in by thick borders, headers have a thick separator, LPIPS|Final and Final|Emoti boundaries are thick, and A–G are wrapped by a thick outer frame. Widths auto-fit per sheet so long Korean filenames render without manual resizing.
+- `<BaseDir>\\근거.txt` is no longer generated automatically; archive the existing file manually if historical rationale text is still required.
+- Pipeline resiliency highlights: emotion batching now normalizes any malformed probability tensors before division (no more boolean-mask mismatches), `_clip_box` skips invalid/NaN bounding boxes instead of calling `float(None)`, and `_process_single_pair` logs stage progress while capturing profiler timings so failures still emit a row with the `Error` field populated.
 - `rapa` (PowerShell helper in scripts/run_rapa.ps1 or pasted into your PS7 profile) still defaults to `D:\RAPA`, forces `--video-backend ffmpeg`, resumes partial workbooks, and now guarantees that image + video extensions are both enumerated (`.jpg/.jpeg/.png/.mp4/.mov/.mkv`). Typical one-liner: `rapa` or `rapa -BaseDir 'D:\RAPA' -Output 'D:\RAPA\rapa_report_samples.xlsx' --resize-512`.
+
